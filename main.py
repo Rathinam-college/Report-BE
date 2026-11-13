@@ -9,7 +9,7 @@ import database as db
 import system_manager
 
 app = FastAPI(
-    title="Rathinam Operations ERP & Analytics API",
+    title="Rathinam Report & Analytics API",
     description="Backend API for Food, Hostel & Transport Operations Management System",
     version="1.4.0"
 )

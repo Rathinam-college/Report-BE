@@ -1,6 +1,6 @@
-# Rathinam Operations ERP - Backend (Report-BE)
+# Rathinam Report - Backend (Report-BE)
 
-FastAPI & PostgreSQL backend engine powering the Rathinam Campus Operations ERP system.
+FastAPI & PostgreSQL backend engine powering the Rathinam Campus Operations Report system.
 
 ## 🚀 Overview
 Provides analytical endpoints, matrix computation, real-time variance calculations, audit flags, master data management, and operational data entry.
@@ -51,3 +51,4 @@ or run `start.bat`.
 - `GET /api/mom-variance` - Month-over-month variance analysis
 - `GET /api/audit-flags` - Automated cost anomaly flags
 - `GET /api/master/*` - Master data categories and cost heads
+

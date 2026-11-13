@@ -6,7 +6,7 @@ def generate_sql_dump() -> str:
     """Generates a complete PostgreSQL database backup dump as SQL statements."""
     dump_lines = [
         "-- ============================================================================",
-        "-- Rathinam Group of Institutions • Operations ERP SQL Database Backup Dump",
+        "-- Rathinam Group of Institutions • Report Database Backup Dump",
         f"-- Export Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "-- Database: PostgreSQL 18 (food_operations)",
         "-- Target Modules: Food & Dining, Hostel Facilities, Transport Fleet",

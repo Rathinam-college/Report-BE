@@ -120,9 +120,11 @@ CREATE TABLE monthly_expense_entries (
 CREATE TABLE dining_census_entries (
     id                  SERIAL PRIMARY KEY,
     period_id           INT NOT NULL UNIQUE REFERENCES billing_periods(id) ON DELETE RESTRICT,
-    active_students     INT NOT NULL DEFAULT 0,        -- Total enrolled hostel diners
-    active_staff        INT NOT NULL DEFAULT 0,        -- Total enrolled dining staff
-    production_meals    INT NOT NULL DEFAULT 0,        -- Total meal plates produced
+    active_students     INT NOT NULL DEFAULT 0,        -- Total enrolled hostel diners (Students count)
+    active_staff        INT NOT NULL DEFAULT 0,        -- Total enrolled dining staff (Staff count)
+    others_count        INT NOT NULL DEFAULT 0,        -- Guest & other diners (Others)
+    total_persons       INT NOT NULL DEFAULT 0,        -- Total Persons count (Students + Staff + Others)
+    production_meals    INT NOT NULL DEFAULT 0,        -- Production count (Total meal plates produced)
     booked_tokens       INT NOT NULL DEFAULT 0,        -- Advance booked meals
     scanned_tokens      INT NOT NULL DEFAULT 0,        -- Actually scanned tokens
     unscanned_meals     INT GENERATED ALWAYS AS (booked_tokens - scanned_tokens) STORED,

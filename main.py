@@ -57,6 +57,10 @@ class BatchSaveRequest(BaseModel):
     period_id: int
     entries: List[BatchEntryItem]
     active_students: Optional[int] = None
+    active_staff: Optional[int] = None
+    others_count: Optional[int] = None
+    total_persons: Optional[int] = None
+    production_meals: Optional[int] = None
     operating_days: Optional[int] = None
 
 class ClonePeriodRequest(BaseModel):
@@ -483,10 +487,32 @@ def get_matrix(module: str = "food"):
             "avg": round(overall_grand_total / num_periods, 2)
         }
 
+        # Query Dining Census / Headcounts (Students count, Staff count, Others, Total Persons, Production count)
+        census_rows = db.execute_query("""
+            SELECT period_id, active_students, active_staff, others_count, total_persons, production_meals
+            FROM dining_census_entries
+        """)
+        census_by_period = {r["period_id"]: r for r in census_rows}
+
+        census_data = {
+            "students": {str(p["id"]): (census_by_period.get(p["id"], {}).get("active_students") or 0) for p in periods},
+            "staff": {str(p["id"]): (census_by_period.get(p["id"], {}).get("active_staff") or 0) for p in periods},
+            "others": {str(p["id"]): (census_by_period.get(p["id"], {}).get("others_count") or 0) for p in periods},
+            "total_persons": {str(p["id"]): (
+                census_by_period.get(p["id"], {}).get("total_persons") or (
+                    (census_by_period.get(p["id"], {}).get("active_students") or 0) +
+                    (census_by_period.get(p["id"], {}).get("active_staff") or 0) +
+                    (census_by_period.get(p["id"], {}).get("others_count") or 0)
+                )
+            ) for p in periods},
+            "production": {str(p["id"]): (census_by_period.get(p["id"], {}).get("production_meals") or 0) for p in periods}
+        }
+
         return {
             "periods": periods,
             "categories": categories_data,
-            "grand_total": grand_total_data
+            "grand_total": grand_total_data,
+            "census": census_data
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -796,14 +822,26 @@ def batch_save_workstation_data(req: BatchSaveRequest):
                     """
                     cur.execute(upsert_sql, (req.period_id, item.cost_head_id, item.vendor_id, item.amount, item.remarks))
 
-                if req.active_students is not None:
+                # Update dining census (Students count, Staff count, Others, Total Persons, Production count)
+                if any(v is not None for v in [req.active_students, req.active_staff, req.others_count, req.total_persons, req.production_meals]):
+                    students = req.active_students if req.active_students is not None else 0
+                    staff = req.active_staff if req.active_staff is not None else 0
+                    others = req.others_count if req.others_count is not None else 0
+                    total_p = req.total_persons if req.total_persons is not None else (students + staff + others)
+                    prod = req.production_meals if req.production_meals is not None else 0
+
                     census_sql = """
-                    INSERT INTO dining_census_entries (period_id, active_students)
-                    VALUES (%s, %s)
+                    INSERT INTO dining_census_entries (period_id, active_students, active_staff, others_count, total_persons, production_meals)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (period_id)
-                    DO UPDATE SET active_students = EXCLUDED.active_students;
+                    DO UPDATE SET
+                        active_students = EXCLUDED.active_students,
+                        active_staff = EXCLUDED.active_staff,
+                        others_count = EXCLUDED.others_count,
+                        total_persons = EXCLUDED.total_persons,
+                        production_meals = EXCLUDED.production_meals;
                     """
-                    cur.execute(census_sql, (req.period_id, req.active_students))
+                    cur.execute(census_sql, (req.period_id, students, staff, others, total_p, prod))
 
                 conn.commit()
                 return {"status": "success", "message": f"Successfully committed batch for period ID {req.period_id}"}
@@ -828,6 +866,21 @@ def clone_period_data(req: ClonePeriodRequest):
             updated_at = CURRENT_TIMESTAMP;
         """
         db.execute_commit(clone_sql, (req.target_period_id, req.source_period_id))
+
+        clone_census_sql = """
+        INSERT INTO dining_census_entries (period_id, active_students, active_staff, others_count, total_persons, production_meals)
+        SELECT %s, active_students, active_staff, others_count, total_persons, production_meals
+        FROM dining_census_entries
+        WHERE period_id = %s
+        ON CONFLICT (period_id)
+        DO UPDATE SET
+            active_students = EXCLUDED.active_students,
+            active_staff = EXCLUDED.active_staff,
+            others_count = EXCLUDED.others_count,
+            total_persons = EXCLUDED.total_persons,
+            production_meals = EXCLUDED.production_meals;
+        """
+        db.execute_commit(clone_census_sql, (req.target_period_id, req.source_period_id))
         return {"status": "success", "message": f"Cloned entries from period {req.source_period_id} to {req.target_period_id}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

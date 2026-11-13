@@ -33,6 +33,13 @@ async def rewrite_report_subpath(request: Request, call_next):
         request.scope["path"] = path.replace("/report/api", "/api", 1)
     return await call_next(request)
 
+@app.on_event("startup")
+def startup_event():
+    try:
+        db.auto_migrate()
+    except Exception as e:
+        print(f"Startup schema migration warning: {e}")
+
 # -------------------------------------------------------------
 # PYDANTIC MODELS
 # -------------------------------------------------------------
@@ -488,10 +495,23 @@ def get_matrix(module: str = "food"):
         }
 
         # Query Dining Census / Headcounts (Students count, Staff count, Others, Total Persons, Production count)
-        census_rows = db.execute_query("""
-            SELECT period_id, active_students, active_staff, others_count, total_persons, production_meals
-            FROM dining_census_entries
-        """)
+        census_rows = []
+        try:
+            census_rows = db.execute_query("""
+                SELECT period_id, active_students, active_staff, others_count, total_persons, production_meals
+                FROM dining_census_entries
+            """)
+        except Exception as e:
+            try:
+                db.auto_migrate()
+                census_rows = db.execute_query("""
+                    SELECT period_id, active_students, active_staff, others_count, total_persons, production_meals
+                    FROM dining_census_entries
+                """)
+            except Exception as inner_e:
+                print(f"[Census Query Notice] {inner_e}")
+                census_rows = []
+
         census_by_period = {r["period_id"]: r for r in census_rows}
 
         census_data = {
@@ -845,6 +865,12 @@ def batch_save_workstation_data(req: BatchSaveRequest):
 
                 conn.commit()
                 return {"status": "success", "message": f"Successfully committed batch for period ID {req.period_id}"}
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
         finally:
             db.release_db_connection(conn)
     except Exception as e:
@@ -867,20 +893,24 @@ def clone_period_data(req: ClonePeriodRequest):
         """
         db.execute_commit(clone_sql, (req.target_period_id, req.source_period_id))
 
-        clone_census_sql = """
-        INSERT INTO dining_census_entries (period_id, active_students, active_staff, others_count, total_persons, production_meals)
-        SELECT %s, active_students, active_staff, others_count, total_persons, production_meals
-        FROM dining_census_entries
-        WHERE period_id = %s
-        ON CONFLICT (period_id)
-        DO UPDATE SET
-            active_students = EXCLUDED.active_students,
-            active_staff = EXCLUDED.active_staff,
-            others_count = EXCLUDED.others_count,
-            total_persons = EXCLUDED.total_persons,
-            production_meals = EXCLUDED.production_meals;
-        """
-        db.execute_commit(clone_census_sql, (req.target_period_id, req.source_period_id))
+        try:
+            clone_census_sql = """
+            INSERT INTO dining_census_entries (period_id, active_students, active_staff, others_count, total_persons, production_meals)
+            SELECT %s, active_students, active_staff, others_count, total_persons, production_meals
+            FROM dining_census_entries
+            WHERE period_id = %s
+            ON CONFLICT (period_id)
+            DO UPDATE SET
+                active_students = EXCLUDED.active_students,
+                active_staff = EXCLUDED.active_staff,
+                others_count = EXCLUDED.others_count,
+                total_persons = EXCLUDED.total_persons,
+                production_meals = EXCLUDED.production_meals;
+            """
+            db.execute_commit(clone_census_sql, (req.target_period_id, req.source_period_id))
+        except Exception as ce:
+            print(f"[Clone Census Notice] {ce}")
+
         return {"status": "success", "message": f"Cloned entries from period {req.source_period_id} to {req.target_period_id}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

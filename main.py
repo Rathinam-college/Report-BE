@@ -393,46 +393,43 @@ def delete_period(period_id: int):
 # -------------------------------------------------------------
 # CORE ANALYTICAL REPORTING & DYNAMIC MATRIX
 # -------------------------------------------------------------
+# EXECUTIVE OVERVIEW API (SCOPED BY MODULE)
+# -------------------------------------------------------------
 @app.get("/api/overview")
-def get_overview():
+def get_overview(module: str = "food"):
     try:
-        exec_rows = db.execute_query("SELECT * FROM vw_food_executive_summary ORDER BY start_date")
-        
-        grand_total = sum(float(r["grand_total_expenses"]) for r in exec_rows)
-        avg_monthly = grand_total / len(exec_rows) if exec_rows else 0
-        total_material = sum(float(r["total_material_fuel"]) for r in exec_rows)
-        total_labour = sum(float(r["total_labour"]) for r in exec_rows)
-        total_maint = sum(float(r["total_maintenance_utilities"]) for r in exec_rows)
-        total_events = sum(float(r["total_event_purchase"]) + float(r["total_food_festival"]) for r in exec_rows)
+        mod = module or "food"
+        rows = db.execute_query("""
+            SELECT 
+                p.period_code,
+                p.period_label,
+                p.start_date,
+                COALESCE(SUM(e.amount), 0) AS total
+            FROM billing_periods p
+            LEFT JOIN monthly_expense_entries e ON p.id = e.period_id AND e.module = %s
+            WHERE p.module = %s
+            GROUP BY p.period_code, p.period_label, p.start_date
+            ORDER BY p.start_date
+        """, (mod, mod))
 
-        trend = []
-        for r in exec_rows:
-            trend.append({
-                "period_code": r["period_code"],
-                "period_label": r["period_label"],
-                "total": float(r["grand_total_expenses"]),
-                "material_fuel": float(r["total_material_fuel"]),
-                "labour": float(r["total_labour"]),
-                "maintenance": float(r["total_maintenance_utilities"]),
-                "events_festivals": float(r["total_event_purchase"]) + float(r["total_food_festival"])
-            })
+        grand_total = sum(float(r["total"]) for r in rows)
+        avg_monthly = grand_total / len(rows) if rows else 0
+
+        trend = [{
+            "period_code": r["period_code"],
+            "period_label": r["period_label"],
+            "total": float(r["total"])
+        } for r in rows]
 
         return {
             "summary": {
                 "grand_total": round(grand_total, 2),
-                "monthly_avg": round(avg_monthly, 2),
-                "total_material_fuel": round(total_material, 2),
-                "material_share_pct": round((total_material / grand_total * 100), 2) if grand_total else 0,
-                "total_labour": round(total_labour, 2),
-                "labour_share_pct": round((total_labour / grand_total * 100), 2) if grand_total else 0,
-                "total_maintenance": round(total_maint, 2),
-                "maintenance_share_pct": round((total_maint / grand_total * 100), 2) if grand_total else 0,
-                "total_events_festivals": round(total_events, 2),
-                "events_share_pct": round((total_events / grand_total * 100), 2) if grand_total else 0
+                "monthly_avg": round(avg_monthly, 2)
             },
             "trend": trend
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/matrix")

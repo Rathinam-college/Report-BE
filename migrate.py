@@ -93,6 +93,7 @@ MIGRATION_STEPS = [
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';
+        UPDATE expense_categories SET is_active = true WHERE is_active IS NOT TRUE;
         """
     ),
     (
@@ -109,6 +110,7 @@ MIGRATION_STEPS = [
             is_active BOOLEAN NOT NULL DEFAULT true,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        UPDATE cost_heads SET is_active = true WHERE is_active IS NOT TRUE;
         """
     ),
     (

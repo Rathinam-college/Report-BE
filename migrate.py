@@ -238,6 +238,18 @@ MIGRATION_STEPS = [
             remarks TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS vacant_college_boys INT NOT NULL DEFAULT 35;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS vacant_college_girls INT NOT NULL DEFAULT 69;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS vacant_sports_boys INT NOT NULL DEFAULT 0;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS vacant_sports_girls INT NOT NULL DEFAULT 0;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS vacant_sports_total INT NOT NULL DEFAULT 0;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS vacant_school_boys INT NOT NULL DEFAULT 0;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS vacant_school_girls INT NOT NULL DEFAULT 0;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS vacant_school_total INT NOT NULL DEFAULT 0;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS maintenance_expenses NUMERIC(14, 2) NOT NULL DEFAULT 119394.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS expenses_occurred NUMERIC(14, 2) NOT NULL DEFAULT 9349172.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS normal_water_student_ltrs NUMERIC(10, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS normal_water_student_cost NUMERIC(10, 2) NOT NULL DEFAULT 88.00;
         """
     ),
     (

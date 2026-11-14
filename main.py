@@ -1074,24 +1074,34 @@ def batch_save_workstation_data(req: BatchSaveRequest):
                         staff_boys, staff_girls, staff_total,
                         total_occupied, vacant_total, vacant_college,
                         occupied_pct, vacant_pct, students_vacated,
-                        tickets_received, tickets_closed, tickets_open,
+                        tickets_received, tickets_closed, tickets_open, total_hours_close,
                         tat_hours, quality_issues_received, quality_issues_closed, quality_issues_open, incidents_count,
                         power_units, power_cost, water_purchase_cost,
                         normal_water_litres, normal_water_cost,
                         drinking_water_litres, drinking_water_cost,
-                        sq_feet, approved_budget, cumulative_budget_spent, remarks
+                        sq_feet, approved_budget, cumulative_budget_spent, remarks,
+                        vacant_college_boys, vacant_college_girls,
+                        vacant_sports_boys, vacant_sports_girls, vacant_sports_total,
+                        vacant_school_boys, vacant_school_girls, vacant_school_total,
+                        maintenance_expenses, expenses_occurred,
+                        normal_water_student_ltrs, normal_water_student_cost
                     ) VALUES (
                         %s, %s, %s, %s,
                         %s, %s, %s,
                         %s, %s, %s,
                         %s, %s, %s,
                         %s, %s, %s,
-                        %s, %s, %s,
+                        %s, %s, %s, %s,
                         %s, %s, %s, %s, %s,
                         %s, %s, %s,
                         %s, %s,
                         %s, %s,
-                        %s, %s, %s, %s
+                        %s, %s, %s, %s,
+                        %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s,
+                        %s, %s
                     )
                     ON CONFLICT (period_id) DO UPDATE SET
                         bed_capacity_boys = EXCLUDED.bed_capacity_boys,
@@ -1112,6 +1122,7 @@ def batch_save_workstation_data(req: BatchSaveRequest):
                         tickets_received = EXCLUDED.tickets_received,
                         tickets_closed = EXCLUDED.tickets_closed,
                         tickets_open = EXCLUDED.tickets_open,
+                        total_hours_close = EXCLUDED.total_hours_close,
                         tat_hours = EXCLUDED.tat_hours,
                         quality_issues_received = EXCLUDED.quality_issues_received,
                         quality_issues_closed = EXCLUDED.quality_issues_closed,
@@ -1127,7 +1138,19 @@ def batch_save_workstation_data(req: BatchSaveRequest):
                         sq_feet = EXCLUDED.sq_feet,
                         approved_budget = EXCLUDED.approved_budget,
                         cumulative_budget_spent = EXCLUDED.cumulative_budget_spent,
-                        remarks = EXCLUDED.remarks;
+                        remarks = EXCLUDED.remarks,
+                        vacant_college_boys = EXCLUDED.vacant_college_boys,
+                        vacant_college_girls = EXCLUDED.vacant_college_girls,
+                        vacant_sports_boys = EXCLUDED.vacant_sports_boys,
+                        vacant_sports_girls = EXCLUDED.vacant_sports_girls,
+                        vacant_sports_total = EXCLUDED.vacant_sports_total,
+                        vacant_school_boys = EXCLUDED.vacant_school_boys,
+                        vacant_school_girls = EXCLUDED.vacant_school_girls,
+                        vacant_school_total = EXCLUDED.vacant_school_total,
+                        maintenance_expenses = EXCLUDED.maintenance_expenses,
+                        expenses_occurred = EXCLUDED.expenses_occurred,
+                        normal_water_student_ltrs = EXCLUDED.normal_water_student_ltrs,
+                        normal_water_student_cost = EXCLUDED.normal_water_student_cost;
                     """
                     cur.execute(hc_sql, (
                         req.period_id,
@@ -1149,6 +1172,7 @@ def batch_save_workstation_data(req: BatchSaveRequest):
                         int(hc.get("tickets_received") or 0),
                         int(hc.get("tickets_closed") or 0),
                         int(hc.get("tickets_open") or 0),
+                        float(hc.get("total_hours_close") or 0.0),
                         float(hc.get("tat_hours") or 0.0),
                         int(hc.get("quality_issues_received") or 0),
                         int(hc.get("quality_issues_closed") or 0),
@@ -1164,7 +1188,19 @@ def batch_save_workstation_data(req: BatchSaveRequest):
                         float(hc.get("sq_feet") or 231701.0),
                         float(hc.get("approved_budget") or 131788118.0),
                         float(hc.get("cumulative_budget_spent") or 0.0),
-                        str(hc.get("remarks") or "")
+                        str(hc.get("remarks") or ""),
+                        int(hc.get("vacant_college_boys") or 35),
+                        int(hc.get("vacant_college_girls") or 69),
+                        int(hc.get("vacant_sports_boys") or 0),
+                        int(hc.get("vacant_sports_girls") or 0),
+                        int(hc.get("vacant_sports_total") or 0),
+                        int(hc.get("vacant_school_boys") or 0),
+                        int(hc.get("vacant_school_girls") or 0),
+                        int(hc.get("vacant_school_total") or 0),
+                        float(hc.get("maintenance_expenses") or 119394.0),
+                        float(hc.get("expenses_occurred") or 9349172.0),
+                        float(hc.get("normal_water_student_ltrs") or 0.0),
+                        float(hc.get("normal_water_student_cost") or 88.0)
                     ))
 
                 # Update Transport Census & Fleet Metrics
@@ -1260,6 +1296,164 @@ def batch_save_workstation_data(req: BatchSaveRequest):
 
                 conn.commit()
                 return {"status": "success", "message": f"Successfully committed batch for period ID {req.period_id}"}
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/hostel-census/{period_id}")
+def save_hostel_census_direct(period_id: int, req: Dict[str, Any]):
+    """
+    Direct endpoint to save or update hostel census & operational metrics for a specific period.
+    """
+    try:
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                hc = req
+                hc_sql = """
+                INSERT INTO hostel_census_entries (
+                    period_id, bed_capacity_boys, bed_capacity_girls, bed_capacity_total,
+                    students_boys, students_girls, students_total,
+                    staff_boys, staff_girls, staff_total,
+                    total_occupied, vacant_total, vacant_college,
+                    occupied_pct, vacant_pct, students_vacated,
+                    tickets_received, tickets_closed, tickets_open, total_hours_close,
+                    tat_hours, quality_issues_received, quality_issues_closed, quality_issues_open, incidents_count,
+                    power_units, power_cost, water_purchase_cost,
+                    normal_water_litres, normal_water_cost,
+                    drinking_water_litres, drinking_water_cost,
+                    sq_feet, approved_budget, cumulative_budget_spent, remarks,
+                    vacant_college_boys, vacant_college_girls,
+                    vacant_sports_boys, vacant_sports_girls, vacant_sports_total,
+                    vacant_school_boys, vacant_school_girls, vacant_school_total,
+                    maintenance_expenses, expenses_occurred,
+                    normal_water_student_ltrs, normal_water_student_cost
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s
+                )
+                ON CONFLICT (period_id) DO UPDATE SET
+                    bed_capacity_boys = EXCLUDED.bed_capacity_boys,
+                    bed_capacity_girls = EXCLUDED.bed_capacity_girls,
+                    bed_capacity_total = EXCLUDED.bed_capacity_total,
+                    students_boys = EXCLUDED.students_boys,
+                    students_girls = EXCLUDED.students_girls,
+                    students_total = EXCLUDED.students_total,
+                    staff_boys = EXCLUDED.staff_boys,
+                    staff_girls = EXCLUDED.staff_girls,
+                    staff_total = EXCLUDED.staff_total,
+                    total_occupied = EXCLUDED.total_occupied,
+                    vacant_total = EXCLUDED.vacant_total,
+                    vacant_college = EXCLUDED.vacant_college,
+                    occupied_pct = EXCLUDED.occupied_pct,
+                    vacant_pct = EXCLUDED.vacant_pct,
+                    students_vacated = EXCLUDED.students_vacated,
+                    tickets_received = EXCLUDED.tickets_received,
+                    tickets_closed = EXCLUDED.tickets_closed,
+                    tickets_open = EXCLUDED.tickets_open,
+                    total_hours_close = EXCLUDED.total_hours_close,
+                    tat_hours = EXCLUDED.tat_hours,
+                    quality_issues_received = EXCLUDED.quality_issues_received,
+                    quality_issues_closed = EXCLUDED.quality_issues_closed,
+                    quality_issues_open = EXCLUDED.quality_issues_open,
+                    incidents_count = EXCLUDED.incidents_count,
+                    power_units = EXCLUDED.power_units,
+                    power_cost = EXCLUDED.power_cost,
+                    water_purchase_cost = EXCLUDED.water_purchase_cost,
+                    normal_water_litres = EXCLUDED.normal_water_litres,
+                    normal_water_cost = EXCLUDED.normal_water_cost,
+                    drinking_water_litres = EXCLUDED.drinking_water_litres,
+                    drinking_water_cost = EXCLUDED.drinking_water_cost,
+                    sq_feet = EXCLUDED.sq_feet,
+                    approved_budget = EXCLUDED.approved_budget,
+                    cumulative_budget_spent = EXCLUDED.cumulative_budget_spent,
+                    remarks = EXCLUDED.remarks,
+                    vacant_college_boys = EXCLUDED.vacant_college_boys,
+                    vacant_college_girls = EXCLUDED.vacant_college_girls,
+                    vacant_sports_boys = EXCLUDED.vacant_sports_boys,
+                    vacant_sports_girls = EXCLUDED.vacant_sports_girls,
+                    vacant_sports_total = EXCLUDED.vacant_sports_total,
+                    vacant_school_boys = EXCLUDED.vacant_school_boys,
+                    vacant_school_girls = EXCLUDED.vacant_school_girls,
+                    vacant_school_total = EXCLUDED.vacant_school_total,
+                    maintenance_expenses = EXCLUDED.maintenance_expenses,
+                    expenses_occurred = EXCLUDED.expenses_occurred,
+                    normal_water_student_ltrs = EXCLUDED.normal_water_student_ltrs,
+                    normal_water_student_cost = EXCLUDED.normal_water_student_cost;
+                """
+                cur.execute(hc_sql, (
+                    period_id,
+                    int(hc.get("bed_capacity_boys") or 0),
+                    int(hc.get("bed_capacity_girls") or 0),
+                    int(hc.get("bed_capacity_total") or 0),
+                    int(hc.get("students_boys") or 0),
+                    int(hc.get("students_girls") or 0),
+                    int(hc.get("students_total") or 0),
+                    int(hc.get("staff_boys") or 0),
+                    int(hc.get("staff_girls") or 0),
+                    int(hc.get("staff_total") or 0),
+                    int(hc.get("total_occupied") or 0),
+                    int(hc.get("vacant_total") or 0),
+                    int(hc.get("vacant_college") or 0),
+                    float(hc.get("occupied_pct") or 0.0),
+                    float(hc.get("vacant_pct") or 0.0),
+                    int(hc.get("students_vacated") or 0),
+                    int(hc.get("tickets_received") or 0),
+                    int(hc.get("tickets_closed") or 0),
+                    int(hc.get("tickets_open") or 0),
+                    float(hc.get("total_hours_close") or 0.0),
+                    float(hc.get("tat_hours") or 0.0),
+                    int(hc.get("quality_issues_received") or 0),
+                    int(hc.get("quality_issues_closed") or 0),
+                    int(hc.get("quality_issues_open") or 0),
+                    int(hc.get("incidents_count") or 0),
+                    int(hc.get("power_units") or 0),
+                    float(hc.get("power_cost") or 0.0),
+                    float(hc.get("water_purchase_cost") or 0.0),
+                    int(hc.get("normal_water_litres") or 0),
+                    float(hc.get("normal_water_cost") or 0.0),
+                    int(hc.get("drinking_water_litres") or 0),
+                    float(hc.get("drinking_water_cost") or 0.0),
+                    float(hc.get("sq_feet") or 231701.0),
+                    float(hc.get("approved_budget") or 131788118.0),
+                    float(hc.get("cumulative_budget_spent") or 0.0),
+                    str(hc.get("remarks") or ""),
+                    int(hc.get("vacant_college_boys") or 35),
+                    int(hc.get("vacant_college_girls") or 69),
+                    int(hc.get("vacant_sports_boys") or 0),
+                    int(hc.get("vacant_sports_girls") or 0),
+                    int(hc.get("vacant_sports_total") or 0),
+                    int(hc.get("vacant_school_boys") or 0),
+                    int(hc.get("vacant_school_girls") or 0),
+                    int(hc.get("vacant_school_total") or 0),
+                    float(hc.get("maintenance_expenses") or 119394.0),
+                    float(hc.get("expenses_occurred") or 9349172.0),
+                    float(hc.get("normal_water_student_ltrs") or 0.0),
+                    float(hc.get("normal_water_student_cost") or 88.0)
+                ))
+                conn.commit()
+                return {"status": "success", "message": f"Hostel census parameters saved successfully for period {period_id}"}
         except Exception:
             try:
                 conn.rollback()

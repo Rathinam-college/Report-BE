@@ -250,6 +250,25 @@ MIGRATION_STEPS = [
         ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS expenses_occurred NUMERIC(14, 2) NOT NULL DEFAULT 9349172.00;
         ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS normal_water_student_ltrs NUMERIC(10, 2) NOT NULL DEFAULT 0.00;
         ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS normal_water_student_cost NUMERIC(10, 2) NOT NULL DEFAULT 88.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS total_occupied_boys INT NOT NULL DEFAULT 0;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS total_occupied_girls INT NOT NULL DEFAULT 0;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS vacant_boys INT NOT NULL DEFAULT 0;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS vacant_girls INT NOT NULL DEFAULT 0;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS occupied_pct_boys NUMERIC(6, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS occupied_pct_girls NUMERIC(6, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS vacant_pct_boys NUMERIC(6, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS vacant_pct_girls NUMERIC(6, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS balance NUMERIC(14, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS per_student_cost_month NUMERIC(12, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS per_student_cost_day NUMERIC(10, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS sq_feet_per_occupant NUMERIC(10, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS power_cost_sqft NUMERIC(10, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS units_per_occupant NUMERIC(10, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS power_cost_occupant NUMERIC(10, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS normal_water_ltr_day NUMERIC(10, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS normal_water_cost_day NUMERIC(10, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS drinking_water_ltr_day NUMERIC(10, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS drinking_water_cost_day NUMERIC(10, 2) NOT NULL DEFAULT 0.00;
         """
     ),
     (
@@ -290,6 +309,21 @@ MIGRATION_STEPS = [
             remarks TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS excess_km_billed_rps NUMERIC(10, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS rps_monthly_billing NUMERIC(12, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS staff_travel_deduction NUMERIC(12, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS additional_kms_billed_rps NUMERIC(12, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS additional_kms_others_billing NUMERIC(12, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS cumulative_income NUMERIC(14, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS balance NUMERIC(14, 2) DEFAULT 13730137.73;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS fee_discount NUMERIC(12, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS per_student_cost_expenses NUMERIC(10, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS per_student_fee_year NUMERIC(10, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS demand_per_km_day NUMERIC(10, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS km_per_veh_day NUMERIC(10, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS fuel_cost_per_km NUMERIC(10, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS diesel_per_100km NUMERIC(10, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS cab_billing NUMERIC(12, 2) DEFAULT 0.00;
         """
     )
 ]

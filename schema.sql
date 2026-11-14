@@ -143,6 +143,85 @@ CREATE TABLE utility_meter_logs (
     created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Hostel Operational & Census Tracking (from hostel.xlsx)
+CREATE TABLE IF NOT EXISTS hostel_census_entries (
+    id                  SERIAL PRIMARY KEY,
+    period_id           INT NOT NULL UNIQUE REFERENCES billing_periods(id) ON DELETE CASCADE,
+    bed_capacity_boys   INT NOT NULL DEFAULT 0,
+    bed_capacity_girls  INT NOT NULL DEFAULT 0,
+    bed_capacity_total  INT NOT NULL DEFAULT 0,
+    students_boys       INT NOT NULL DEFAULT 0,
+    students_girls      INT NOT NULL DEFAULT 0,
+    students_total      INT NOT NULL DEFAULT 0,
+    staff_boys          INT NOT NULL DEFAULT 0,
+    staff_girls         INT NOT NULL DEFAULT 0,
+    staff_total         INT NOT NULL DEFAULT 0,
+    total_occupied      INT NOT NULL DEFAULT 0,
+    vacant_total        INT NOT NULL DEFAULT 0,
+    vacant_college      INT NOT NULL DEFAULT 0,
+    occupied_pct        NUMERIC(6, 2) NOT NULL DEFAULT 0.00,
+    vacant_pct          NUMERIC(6, 2) NOT NULL DEFAULT 0.00,
+    students_vacated    INT NOT NULL DEFAULT 0,
+    tickets_received    INT NOT NULL DEFAULT 0,
+    tickets_closed      INT NOT NULL DEFAULT 0,
+    tickets_open        INT NOT NULL DEFAULT 0,
+    total_hours_close   NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
+    tat_hours           NUMERIC(8, 2) NOT NULL DEFAULT 0.00,
+    quality_issues_received INT NOT NULL DEFAULT 0,
+    quality_issues_closed INT NOT NULL DEFAULT 0,
+    quality_issues_open INT NOT NULL DEFAULT 0,
+    incidents_count     INT NOT NULL DEFAULT 0,
+    power_units         INT NOT NULL DEFAULT 0,
+    power_cost          NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    water_purchase_cost NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    normal_water_litres BIGINT NOT NULL DEFAULT 0,
+    normal_water_cost   NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    drinking_water_litres BIGINT NOT NULL DEFAULT 0,
+    drinking_water_cost NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    sq_feet             NUMERIC(12, 2) NOT NULL DEFAULT 231701.00,
+    approved_budget     NUMERIC(14, 2) NOT NULL DEFAULT 131788118.00,
+    cumulative_budget_spent NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+    remarks             TEXT DEFAULT '',
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Transport Operational & Fleet Tracking (from transport.xlsx)
+CREATE TABLE IF NOT EXISTS transport_census_entries (
+    id                  SERIAL PRIMARY KEY,
+    period_id           INT NOT NULL UNIQUE REFERENCES billing_periods(id) ON DELETE CASCADE,
+    vehicles_count      VARCHAR(20) NOT NULL DEFAULT '18+1',
+    passengers_count    INT NOT NULL DEFAULT 447,
+    students_count      INT NOT NULL DEFAULT 0,
+    staff_count         INT NOT NULL DEFAULT 0,
+    approved_kms        NUMERIC(10, 2) NOT NULL DEFAULT 26691.00,
+    actual_kms          NUMERIC(10, 2) NOT NULL DEFAULT 25777.00,
+    additional_kms      NUMERIC(10, 2) NOT NULL DEFAULT 2481.00,
+    excess_kms_rps      NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
+    fuel_expenses       NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    diesel_litres       NUMERIC(10, 2) NOT NULL DEFAULT 5184.84,
+    fc_cost             NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    statutory_cost      NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    repair_maintenance_cost NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    employee_cost       NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    other_cost          NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    total_expenses      NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    fee_demand          NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    fee_collected       NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    fee_unpaid          NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    service_tickets_raised INT NOT NULL DEFAULT 38,
+    service_tickets_closed INT NOT NULL DEFAULT 38,
+    service_tickets_open INT NOT NULL DEFAULT 0,
+    quality_issues_received INT NOT NULL DEFAULT 0,
+    quality_issues_closed INT NOT NULL DEFAULT 0,
+    quality_issues_open INT NOT NULL DEFAULT 0,
+    statutory_compliance INT NOT NULL DEFAULT 1,
+    incidents_count     INT NOT NULL DEFAULT 1,
+    approved_budget     NUMERIC(14, 2) NOT NULL DEFAULT 13730137.73,
+    cumulative_budget_spent NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+    remarks             TEXT DEFAULT '',
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ------------------------------------------------------------
 -- 5. INDEXES FOR PERFORMANCE
 -- ------------------------------------------------------------

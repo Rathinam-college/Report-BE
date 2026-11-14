@@ -78,31 +78,11 @@ def auto_migrate():
     Automatically verifies and applies schema migrations on startup.
     Idempotent: safe to run multiple times across environments.
     """
-    migrations = [
-        """
-        CREATE TABLE IF NOT EXISTS dining_census_entries (
-            id SERIAL PRIMARY KEY,
-            period_id INT NOT NULL UNIQUE REFERENCES billing_periods(id) ON DELETE CASCADE,
-            active_students INT NOT NULL DEFAULT 0,
-            active_staff INT NOT NULL DEFAULT 0,
-            others_count INT NOT NULL DEFAULT 0,
-            total_persons INT NOT NULL DEFAULT 0,
-            production_meals INT NOT NULL DEFAULT 0,
-            booked_tokens INT NOT NULL DEFAULT 0,
-            scanned_tokens INT NOT NULL DEFAULT 0,
-            unscanned_meals INT NOT NULL DEFAULT 0,
-            remarks TEXT DEFAULT '',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """,
-        "ALTER TABLE dining_census_entries ADD COLUMN IF NOT EXISTS others_count INT NOT NULL DEFAULT 0;",
-        "ALTER TABLE dining_census_entries ADD COLUMN IF NOT EXISTS total_persons INT NOT NULL DEFAULT 0;",
-        "ALTER TABLE dining_census_entries ADD COLUMN IF NOT EXISTS production_meals INT NOT NULL DEFAULT 0;"
-    ]
-    for sql in migrations:
-        try:
-            execute_commit(sql)
-        except Exception as e:
-            print(f"[AutoMigrate] Notice: {e}")
+    try:
+        from migrate import run_migrations
+        return run_migrations()
+    except Exception as e:
+        print(f"[AutoMigrate] Notice: {e}")
+        return False
 
 

@@ -69,6 +69,9 @@ class BatchSaveRequest(BaseModel):
     total_persons: Optional[int] = None
     production_meals: Optional[int] = None
     operating_days: Optional[int] = None
+    hostel_census: Optional[Dict[str, Any]] = None
+    transport_census: Optional[Dict[str, Any]] = None
+    module: Optional[str] = "food"
 
 class ClonePeriodRequest(BaseModel):
     source_period_id: int
@@ -528,11 +531,37 @@ def get_matrix(module: str = "food"):
             "production": {str(p["id"]): (census_by_period.get(p["id"], {}).get("production_meals") or 0) for p in periods}
         }
 
+        # Query Hostel Census / Operational Metrics (when module == 'hostel')
+        hostel_census_data = {}
+        try:
+            h_rows = db.execute_query("SELECT * FROM hostel_census_entries")
+            for hr in h_rows:
+                hostel_census_data[str(hr["period_id"])] = {
+                    k: (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+                    for k, v in hr.items()
+                }
+        except Exception as he:
+            print(f"[Hostel Census Query Notice] {he}")
+
+        # Query Transport Census / Fleet Metrics
+        transport_census_data = {}
+        try:
+            t_rows = db.execute_query("SELECT * FROM transport_census_entries")
+            for tr in t_rows:
+                transport_census_data[str(tr["period_id"])] = {
+                    k: (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+                    for k, v in tr.items()
+                }
+        except Exception as te:
+            print(f"[Transport Census Query Notice] {te}")
+
         return {
             "periods": periods,
             "categories": categories_data,
             "grand_total": grand_total_data,
-            "census": census_data
+            "census": census_data,
+            "hostel_census": hostel_census_data,
+            "transport_census": transport_census_data
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -863,6 +892,200 @@ def batch_save_workstation_data(req: BatchSaveRequest):
                     """
                     cur.execute(census_sql, (req.period_id, students, staff, others, total_p, prod))
 
+                # Update Hostel Census & Operational Metrics
+                if req.hostel_census:
+                    hc = req.hostel_census
+                    hc_sql = """
+                    INSERT INTO hostel_census_entries (
+                        period_id, bed_capacity_boys, bed_capacity_girls, bed_capacity_total,
+                        students_boys, students_girls, students_total,
+                        staff_boys, staff_girls, staff_total,
+                        total_occupied, vacant_total, vacant_college,
+                        occupied_pct, vacant_pct, students_vacated,
+                        tickets_received, tickets_closed, tickets_open,
+                        tat_hours, quality_issues_received, quality_issues_closed, quality_issues_open, incidents_count,
+                        power_units, power_cost, water_purchase_cost,
+                        normal_water_litres, normal_water_cost,
+                        drinking_water_litres, drinking_water_cost,
+                        sq_feet, approved_budget, cumulative_budget_spent, remarks
+                    ) VALUES (
+                        %s, %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s,
+                        %s, %s,
+                        %s, %s, %s, %s
+                    )
+                    ON CONFLICT (period_id) DO UPDATE SET
+                        bed_capacity_boys = EXCLUDED.bed_capacity_boys,
+                        bed_capacity_girls = EXCLUDED.bed_capacity_girls,
+                        bed_capacity_total = EXCLUDED.bed_capacity_total,
+                        students_boys = EXCLUDED.students_boys,
+                        students_girls = EXCLUDED.students_girls,
+                        students_total = EXCLUDED.students_total,
+                        staff_boys = EXCLUDED.staff_boys,
+                        staff_girls = EXCLUDED.staff_girls,
+                        staff_total = EXCLUDED.staff_total,
+                        total_occupied = EXCLUDED.total_occupied,
+                        vacant_total = EXCLUDED.vacant_total,
+                        vacant_college = EXCLUDED.vacant_college,
+                        occupied_pct = EXCLUDED.occupied_pct,
+                        vacant_pct = EXCLUDED.vacant_pct,
+                        students_vacated = EXCLUDED.students_vacated,
+                        tickets_received = EXCLUDED.tickets_received,
+                        tickets_closed = EXCLUDED.tickets_closed,
+                        tickets_open = EXCLUDED.tickets_open,
+                        tat_hours = EXCLUDED.tat_hours,
+                        quality_issues_received = EXCLUDED.quality_issues_received,
+                        quality_issues_closed = EXCLUDED.quality_issues_closed,
+                        quality_issues_open = EXCLUDED.quality_issues_open,
+                        incidents_count = EXCLUDED.incidents_count,
+                        power_units = EXCLUDED.power_units,
+                        power_cost = EXCLUDED.power_cost,
+                        water_purchase_cost = EXCLUDED.water_purchase_cost,
+                        normal_water_litres = EXCLUDED.normal_water_litres,
+                        normal_water_cost = EXCLUDED.normal_water_cost,
+                        drinking_water_litres = EXCLUDED.drinking_water_litres,
+                        drinking_water_cost = EXCLUDED.drinking_water_cost,
+                        sq_feet = EXCLUDED.sq_feet,
+                        approved_budget = EXCLUDED.approved_budget,
+                        cumulative_budget_spent = EXCLUDED.cumulative_budget_spent,
+                        remarks = EXCLUDED.remarks;
+                    """
+                    cur.execute(hc_sql, (
+                        req.period_id,
+                        int(hc.get("bed_capacity_boys") or 0),
+                        int(hc.get("bed_capacity_girls") or 0),
+                        int(hc.get("bed_capacity_total") or 0),
+                        int(hc.get("students_boys") or 0),
+                        int(hc.get("students_girls") or 0),
+                        int(hc.get("students_total") or 0),
+                        int(hc.get("staff_boys") or 0),
+                        int(hc.get("staff_girls") or 0),
+                        int(hc.get("staff_total") or 0),
+                        int(hc.get("total_occupied") or 0),
+                        int(hc.get("vacant_total") or 0),
+                        int(hc.get("vacant_college") or 0),
+                        float(hc.get("occupied_pct") or 0.0),
+                        float(hc.get("vacant_pct") or 0.0),
+                        int(hc.get("students_vacated") or 0),
+                        int(hc.get("tickets_received") or 0),
+                        int(hc.get("tickets_closed") or 0),
+                        int(hc.get("tickets_open") or 0),
+                        float(hc.get("tat_hours") or 0.0),
+                        int(hc.get("quality_issues_received") or 0),
+                        int(hc.get("quality_issues_closed") or 0),
+                        int(hc.get("quality_issues_open") or 0),
+                        int(hc.get("incidents_count") or 0),
+                        int(hc.get("power_units") or 0),
+                        float(hc.get("power_cost") or 0.0),
+                        float(hc.get("water_purchase_cost") or 0.0),
+                        int(hc.get("normal_water_litres") or 0),
+                        float(hc.get("normal_water_cost") or 0.0),
+                        int(hc.get("drinking_water_litres") or 0),
+                        float(hc.get("drinking_water_cost") or 0.0),
+                        float(hc.get("sq_feet") or 231701.0),
+                        float(hc.get("approved_budget") or 131788118.0),
+                        float(hc.get("cumulative_budget_spent") or 0.0),
+                        str(hc.get("remarks") or "")
+                    ))
+
+                # Update Transport Census & Fleet Metrics
+                if req.transport_census:
+                    tc = req.transport_census
+                    tc_sql = """
+                    INSERT INTO transport_census_entries (
+                        period_id, vehicles_count, passengers_count, students_count, staff_count,
+                        approved_kms, actual_kms, additional_kms, excess_kms_rps,
+                        fuel_expenses, diesel_litres, fc_cost, statutory_cost,
+                        repair_maintenance_cost, employee_cost, other_cost, total_expenses,
+                        fee_demand, fee_collected, fee_unpaid,
+                        service_tickets_raised, service_tickets_closed, service_tickets_open,
+                        quality_issues_received, quality_issues_closed, quality_issues_open,
+                        statutory_compliance, incidents_count,
+                        approved_budget, cumulative_budget_spent, remarks
+                    ) VALUES (
+                        %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s,
+                        %s, %s, %s
+                    )
+                    ON CONFLICT (period_id) DO UPDATE SET
+                        vehicles_count = EXCLUDED.vehicles_count,
+                        passengers_count = EXCLUDED.passengers_count,
+                        students_count = EXCLUDED.students_count,
+                        staff_count = EXCLUDED.staff_count,
+                        approved_kms = EXCLUDED.approved_kms,
+                        actual_kms = EXCLUDED.actual_kms,
+                        additional_kms = EXCLUDED.additional_kms,
+                        excess_kms_rps = EXCLUDED.excess_kms_rps,
+                        fuel_expenses = EXCLUDED.fuel_expenses,
+                        diesel_litres = EXCLUDED.diesel_litres,
+                        fc_cost = EXCLUDED.fc_cost,
+                        statutory_cost = EXCLUDED.statutory_cost,
+                        repair_maintenance_cost = EXCLUDED.repair_maintenance_cost,
+                        employee_cost = EXCLUDED.employee_cost,
+                        other_cost = EXCLUDED.other_cost,
+                        total_expenses = EXCLUDED.total_expenses,
+                        fee_demand = EXCLUDED.fee_demand,
+                        fee_collected = EXCLUDED.fee_collected,
+                        fee_unpaid = EXCLUDED.fee_unpaid,
+                        service_tickets_raised = EXCLUDED.service_tickets_raised,
+                        service_tickets_closed = EXCLUDED.service_tickets_closed,
+                        service_tickets_open = EXCLUDED.service_tickets_open,
+                        quality_issues_received = EXCLUDED.quality_issues_received,
+                        quality_issues_closed = EXCLUDED.quality_issues_closed,
+                        quality_issues_open = EXCLUDED.quality_issues_open,
+                        statutory_compliance = EXCLUDED.statutory_compliance,
+                        incidents_count = EXCLUDED.incidents_count,
+                        approved_budget = EXCLUDED.approved_budget,
+                        cumulative_budget_spent = EXCLUDED.cumulative_budget_spent,
+                        remarks = EXCLUDED.remarks;
+                    """
+                    cur.execute(tc_sql, (
+                        req.period_id,
+                        str(tc.get("vehicles_count") or "18+1"),
+                        int(tc.get("passengers_count") or 0),
+                        int(tc.get("students_count") or 0),
+                        int(tc.get("staff_count") or 0),
+                        float(tc.get("approved_kms") or 0.0),
+                        float(tc.get("actual_kms") or 0.0),
+                        float(tc.get("additional_kms") or 0.0),
+                        float(tc.get("excess_kms_rps") or 0.0),
+                        float(tc.get("fuel_expenses") or 0.0),
+                        float(tc.get("diesel_litres") or 0.0),
+                        float(tc.get("fc_cost") or 0.0),
+                        float(tc.get("statutory_cost") or 0.0),
+                        float(tc.get("repair_maintenance_cost") or 0.0),
+                        float(tc.get("employee_cost") or 0.0),
+                        float(tc.get("other_cost") or 0.0),
+                        float(tc.get("total_expenses") or 0.0),
+                        float(tc.get("fee_demand") or 0.0),
+                        float(tc.get("fee_collected") or 0.0),
+                        float(tc.get("fee_unpaid") or 0.0),
+                        int(tc.get("service_tickets_raised") or 0),
+                        int(tc.get("service_tickets_closed") or 0),
+                        int(tc.get("service_tickets_open") or 0),
+                        int(tc.get("quality_issues_received") or 0),
+                        int(tc.get("quality_issues_closed") or 0),
+                        int(tc.get("quality_issues_open") or 0),
+                        int(tc.get("statutory_compliance") or 1),
+                        int(tc.get("incidents_count") or 0),
+                        float(tc.get("approved_budget") or 13730137.73),
+                        float(tc.get("cumulative_budget_spent") or 0.0),
+                        str(tc.get("remarks") or "")
+                    ))
+
                 conn.commit()
                 return {"status": "success", "message": f"Successfully committed batch for period ID {req.period_id}"}
         except Exception:
@@ -910,6 +1133,136 @@ def clone_period_data(req: ClonePeriodRequest):
             db.execute_commit(clone_census_sql, (req.target_period_id, req.source_period_id))
         except Exception as ce:
             print(f"[Clone Census Notice] {ce}")
+
+        try:
+            clone_hostel_sql = """
+            INSERT INTO hostel_census_entries (
+                period_id, bed_capacity_boys, bed_capacity_girls, bed_capacity_total,
+                students_boys, students_girls, students_total,
+                staff_boys, staff_girls, staff_total,
+                total_occupied, vacant_total, vacant_college,
+                occupied_pct, vacant_pct, students_vacated,
+                tickets_received, tickets_closed, tickets_open,
+                tat_hours, quality_issues_received, quality_issues_closed, quality_issues_open, incidents_count,
+                power_units, power_cost, water_purchase_cost,
+                normal_water_litres, normal_water_cost,
+                drinking_water_litres, drinking_water_cost,
+                sq_feet, approved_budget, cumulative_budget_spent, remarks
+            )
+            SELECT
+                %s, bed_capacity_boys, bed_capacity_girls, bed_capacity_total,
+                students_boys, students_girls, students_total,
+                staff_boys, staff_girls, staff_total,
+                total_occupied, vacant_total, vacant_college,
+                occupied_pct, vacant_pct, students_vacated,
+                tickets_received, tickets_closed, tickets_open,
+                tat_hours, quality_issues_received, quality_issues_closed, quality_issues_open, incidents_count,
+                power_units, power_cost, water_purchase_cost,
+                normal_water_litres, normal_water_cost,
+                drinking_water_litres, drinking_water_cost,
+                sq_feet, approved_budget, cumulative_budget_spent, remarks
+            FROM hostel_census_entries
+            WHERE period_id = %s
+            ON CONFLICT (period_id) DO UPDATE SET
+                bed_capacity_boys = EXCLUDED.bed_capacity_boys,
+                bed_capacity_girls = EXCLUDED.bed_capacity_girls,
+                bed_capacity_total = EXCLUDED.bed_capacity_total,
+                students_boys = EXCLUDED.students_boys,
+                students_girls = EXCLUDED.students_girls,
+                students_total = EXCLUDED.students_total,
+                staff_boys = EXCLUDED.staff_boys,
+                staff_girls = EXCLUDED.staff_girls,
+                staff_total = EXCLUDED.staff_total,
+                total_occupied = EXCLUDED.total_occupied,
+                vacant_total = EXCLUDED.vacant_total,
+                vacant_college = EXCLUDED.vacant_college,
+                occupied_pct = EXCLUDED.occupied_pct,
+                vacant_pct = EXCLUDED.vacant_pct,
+                students_vacated = EXCLUDED.students_vacated,
+                tickets_received = EXCLUDED.tickets_received,
+                tickets_closed = EXCLUDED.tickets_closed,
+                tickets_open = EXCLUDED.tickets_open,
+                tat_hours = EXCLUDED.tat_hours,
+                quality_issues_received = EXCLUDED.quality_issues_received,
+                quality_issues_closed = EXCLUDED.quality_issues_closed,
+                quality_issues_open = EXCLUDED.quality_issues_open,
+                incidents_count = EXCLUDED.incidents_count,
+                power_units = EXCLUDED.power_units,
+                power_cost = EXCLUDED.power_cost,
+                water_purchase_cost = EXCLUDED.water_purchase_cost,
+                normal_water_litres = EXCLUDED.normal_water_litres,
+                normal_water_cost = EXCLUDED.normal_water_cost,
+                drinking_water_litres = EXCLUDED.drinking_water_litres,
+                drinking_water_cost = EXCLUDED.drinking_water_cost,
+                sq_feet = EXCLUDED.sq_feet,
+                approved_budget = EXCLUDED.approved_budget,
+                cumulative_budget_spent = EXCLUDED.cumulative_budget_spent,
+                remarks = EXCLUDED.remarks;
+            """
+            db.execute_commit(clone_hostel_sql, (req.target_period_id, req.source_period_id))
+        except Exception as he:
+            print(f"[Clone Hostel Census Notice] {he}")
+
+        try:
+            clone_transport_sql = """
+            INSERT INTO transport_census_entries (
+                period_id, vehicles_count, passengers_count, students_count, staff_count,
+                approved_kms, actual_kms, additional_kms, excess_kms_rps,
+                fuel_expenses, diesel_litres, fc_cost, statutory_cost,
+                repair_maintenance_cost, employee_cost, other_cost, total_expenses,
+                fee_demand, fee_collected, fee_unpaid,
+                service_tickets_raised, service_tickets_closed, service_tickets_open,
+                quality_issues_received, quality_issues_closed, quality_issues_open,
+                statutory_compliance, incidents_count,
+                approved_budget, cumulative_budget_spent, remarks
+            )
+            SELECT
+                %s, vehicles_count, passengers_count, students_count, staff_count,
+                approved_kms, actual_kms, additional_kms, excess_kms_rps,
+                fuel_expenses, diesel_litres, fc_cost, statutory_cost,
+                repair_maintenance_cost, employee_cost, other_cost, total_expenses,
+                fee_demand, fee_collected, fee_unpaid,
+                service_tickets_raised, service_tickets_closed, service_tickets_open,
+                quality_issues_received, quality_issues_closed, quality_issues_open,
+                statutory_compliance, incidents_count,
+                approved_budget, cumulative_budget_spent, remarks
+            FROM transport_census_entries
+            WHERE period_id = %s
+            ON CONFLICT (period_id) DO UPDATE SET
+                vehicles_count = EXCLUDED.vehicles_count,
+                passengers_count = EXCLUDED.passengers_count,
+                students_count = EXCLUDED.students_count,
+                staff_count = EXCLUDED.staff_count,
+                approved_kms = EXCLUDED.approved_kms,
+                actual_kms = EXCLUDED.actual_kms,
+                additional_kms = EXCLUDED.additional_kms,
+                excess_kms_rps = EXCLUDED.excess_kms_rps,
+                fuel_expenses = EXCLUDED.fuel_expenses,
+                diesel_litres = EXCLUDED.diesel_litres,
+                fc_cost = EXCLUDED.fc_cost,
+                statutory_cost = EXCLUDED.statutory_cost,
+                repair_maintenance_cost = EXCLUDED.repair_maintenance_cost,
+                employee_cost = EXCLUDED.employee_cost,
+                other_cost = EXCLUDED.other_cost,
+                total_expenses = EXCLUDED.total_expenses,
+                fee_demand = EXCLUDED.fee_demand,
+                fee_collected = EXCLUDED.fee_collected,
+                fee_unpaid = EXCLUDED.fee_unpaid,
+                service_tickets_raised = EXCLUDED.service_tickets_raised,
+                service_tickets_closed = EXCLUDED.service_tickets_closed,
+                service_tickets_open = EXCLUDED.service_tickets_open,
+                quality_issues_received = EXCLUDED.quality_issues_received,
+                quality_issues_closed = EXCLUDED.quality_issues_closed,
+                quality_issues_open = EXCLUDED.quality_issues_open,
+                statutory_compliance = EXCLUDED.statutory_compliance,
+                incidents_count = EXCLUDED.incidents_count,
+                approved_budget = EXCLUDED.approved_budget,
+                cumulative_budget_spent = EXCLUDED.cumulative_budget_spent,
+                remarks = EXCLUDED.remarks;
+            """
+            db.execute_commit(clone_transport_sql, (req.target_period_id, req.source_period_id))
+        except Exception as te:
+            print(f"[Clone Transport Census Notice] {te}")
 
         return {"status": "success", "message": f"Cloned entries from period {req.source_period_id} to {req.target_period_id}"}
     except Exception as e:

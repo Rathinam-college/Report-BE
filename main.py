@@ -87,6 +87,7 @@ class PeriodCreate(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     operating_days: Optional[int] = None
+    module: Optional[str] = "food"
     clone_from_period_id: Optional[int] = None
 
 class PeriodUpdate(BaseModel):
@@ -207,15 +208,24 @@ def health_check():
 # BILLING PERIODS ENDPOINTS
 # -------------------------------------------------------------
 @app.get("/api/periods")
-def get_periods():
+def get_periods(module: Optional[str] = None):
     try:
-        return db.execute_query("SELECT id, period_code, period_label, start_date, end_date, operating_days, is_closed FROM billing_periods ORDER BY start_date")
+        if module and module != "all":
+            return db.execute_query(
+                "SELECT id, period_code, period_label, start_date, end_date, operating_days, is_closed, module "
+                "FROM billing_periods WHERE module = %s ORDER BY start_date",
+                (module,)
+            )
+        return db.execute_query(
+            "SELECT id, period_code, period_label, start_date, end_date, operating_days, is_closed, module "
+            "FROM billing_periods ORDER BY start_date"
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/master/periods")
-def get_master_periods():
-    return get_periods()
+def get_master_periods(module: Optional[str] = None):
+    return get_periods(module)
 
 @app.post("/api/periods")
 def create_period(req: PeriodCreate):
@@ -224,6 +234,8 @@ def create_period(req: PeriodCreate):
         import calendar
 
         label = req.period_label.strip()
+        mod = (req.module or "food").strip().lower()
+
         months = {
             'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
             'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
@@ -240,7 +252,7 @@ def create_period(req: PeriodCreate):
                     y_str = '20' + y_str
                 derived_code = f"{y_str}-{m_num}"
             else:
-                existing = db.execute_query("SELECT COUNT(*) as cnt FROM billing_periods", fetch_all=False)
+                existing = db.execute_query("SELECT COUNT(*) as cnt FROM billing_periods WHERE module = %s", (mod,), fetch_all=False)
                 cnt = (existing['cnt'] if existing else 0) + 1
                 derived_code = f"2026-{cnt:02d}"
 
@@ -255,13 +267,13 @@ def create_period(req: PeriodCreate):
         operating_days = req.operating_days if req.operating_days is not None else last_day
 
         insert_sql = """
-        INSERT INTO billing_periods (fiscal_year_id, period_code, period_label, start_date, end_date, operating_days, is_closed)
-        VALUES (1, %s, %s, %s, %s, %s, false)
-        RETURNING id, period_code, period_label;
+        INSERT INTO billing_periods (fiscal_year_id, period_code, period_label, start_date, end_date, operating_days, is_closed, module)
+        VALUES (1, %s, %s, %s, %s, %s, false, %s)
+        RETURNING id, period_code, period_label, module;
         """
         new_period = db.execute_query(
             insert_sql,
-            (derived_code, label, start_date, end_date, operating_days),
+            (derived_code, label, start_date, end_date, operating_days, mod),
             fetch_all=False
         )
 
@@ -273,6 +285,45 @@ def create_period(req: PeriodCreate):
             WHERE period_id = %s;
             """
             db.execute_commit(clone_sql, (new_period["id"], req.clone_from_period_id))
+
+            if mod == "hostel":
+                db.execute_commit("""
+                INSERT INTO hostel_census_entries (
+                    period_id, bed_capacity_boys, bed_capacity_girls, bed_capacity_total,
+                    students_boys, students_girls, students_total, staff_boys, staff_girls, staff_total,
+                    total_occupied, vacant_total, vacant_college, occupied_pct, vacant_pct, students_vacated,
+                    tickets_received, tickets_closed, tickets_open, tat_hours, quality_issues_received,
+                    quality_issues_closed, quality_issues_open, incidents_count, power_units, power_cost,
+                    water_purchase_cost, normal_water_litres, normal_water_cost, drinking_water_litres,
+                    drinking_water_cost, sq_feet, approved_budget, cumulative_budget_spent
+                )
+                SELECT %s, bed_capacity_boys, bed_capacity_girls, bed_capacity_total,
+                    students_boys, students_girls, students_total, staff_boys, staff_girls, staff_total,
+                    total_occupied, vacant_total, vacant_college, occupied_pct, vacant_pct, students_vacated,
+                    tickets_received, tickets_closed, tickets_open, tat_hours, quality_issues_received,
+                    quality_issues_closed, quality_issues_open, incidents_count, power_units, power_cost,
+                    water_purchase_cost, normal_water_litres, normal_water_cost, drinking_water_litres,
+                    drinking_water_cost, sq_feet, approved_budget, cumulative_budget_spent
+                FROM hostel_census_entries WHERE period_id = %s
+                ON CONFLICT (period_id) DO NOTHING;
+                """, (new_period["id"], req.clone_from_period_id))
+            elif mod == "transport":
+                db.execute_commit("""
+                INSERT INTO transport_census_entries (
+                    period_id, vehicles_count, passengers_count, students_count, staff_count,
+                    approved_kms, actual_kms, additional_kms, diesel_litres, fuel_expenses,
+                    service_tickets_raised, service_tickets_closed, service_tickets_open,
+                    quality_issues_received, quality_issues_closed, quality_issues_open,
+                    statutory_compliance, incidents_count, approved_budget, cumulative_budget_spent
+                )
+                SELECT %s, vehicles_count, passengers_count, students_count, staff_count,
+                    approved_kms, actual_kms, additional_kms, diesel_litres, fuel_expenses,
+                    service_tickets_raised, service_tickets_closed, service_tickets_open,
+                    quality_issues_received, quality_issues_closed, quality_issues_open,
+                    statutory_compliance, incidents_count, approved_budget, cumulative_budget_spent
+                FROM transport_census_entries WHERE period_id = %s
+                ON CONFLICT (period_id) DO NOTHING;
+                """, (new_period["id"], req.clone_from_period_id))
 
         return {"status": "success", "period": new_period}
     except Exception as e:
@@ -384,9 +435,15 @@ def get_matrix(module: str = "food"):
     Supports filtering by module ('food', 'hostel', 'transport', 'all').
     """
     try:
-        periods = db.execute_query(
-            "SELECT id, period_code, period_label, start_date, operating_days, is_closed FROM billing_periods ORDER BY start_date"
-        )
+        if module and module != "all":
+            periods = db.execute_query(
+                "SELECT id, period_code, period_label, start_date, operating_days, is_closed, module FROM billing_periods WHERE module = %s ORDER BY start_date",
+                (module,)
+            )
+        else:
+            periods = db.execute_query(
+                "SELECT id, period_code, period_label, start_date, operating_days, is_closed, module FROM billing_periods ORDER BY start_date"
+            )
         num_periods = len(periods) or 1
 
         if module and module != "all":
@@ -586,10 +643,21 @@ def get_mom_variance():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/master-data")
-def get_master_data():
+def get_master_data(module: Optional[str] = "food"):
     try:
-        periods = db.execute_query("SELECT id, period_code, period_label, start_date, end_date, operating_days, is_closed FROM billing_periods ORDER BY start_date")
-        categories = db.execute_query("SELECT id, code, name, display_order, is_active FROM expense_categories WHERE is_active = true ORDER BY display_order")
+        if module and module != "all":
+            periods = db.execute_query(
+                "SELECT id, period_code, period_label, start_date, end_date, operating_days, is_closed, module "
+                "FROM billing_periods WHERE module = %s ORDER BY start_date",
+                (module,)
+            )
+            categories = db.execute_query(
+                "SELECT id, code, name, display_order, is_active, module FROM expense_categories WHERE is_active = true AND module = %s ORDER BY display_order",
+                (module,)
+            )
+        else:
+            periods = db.execute_query("SELECT id, period_code, period_label, start_date, end_date, operating_days, is_closed, module FROM billing_periods ORDER BY start_date")
+            categories = db.execute_query("SELECT id, code, name, display_order, is_active, module FROM expense_categories WHERE is_active = true ORDER BY display_order")
         cost_heads = db.execute_query("""
             SELECT ch.id, ch.category_id, c.name AS category_name, ch.code, ch.name, ch.cost_behavior, ch.display_order, ch.default_vendor_id, ch.is_active, v.name AS default_vendor_name
             FROM cost_heads ch

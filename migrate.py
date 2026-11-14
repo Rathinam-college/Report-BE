@@ -45,19 +45,25 @@ MIGRATION_STEPS = [
         """
     ),
     (
-        "Billing Periods Table",
+        "Billing Periods Table & Module Scoping",
         """
         CREATE TABLE IF NOT EXISTS billing_periods (
             id SERIAL PRIMARY KEY,
             fiscal_year_id INT NOT NULL REFERENCES fiscal_years(id) ON DELETE RESTRICT,
-            period_code VARCHAR(10) NOT NULL UNIQUE,
-            period_label VARCHAR(20) NOT NULL,
+            period_code VARCHAR(20) NOT NULL,
+            period_label VARCHAR(50) NOT NULL,
             start_date DATE NOT NULL,
             end_date DATE NOT NULL,
             operating_days INT NOT NULL DEFAULT 30,
             is_closed BOOLEAN NOT NULL DEFAULT false,
+            module VARCHAR(50) NOT NULL DEFAULT 'food',
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        ALTER TABLE billing_periods ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';
+        ALTER TABLE billing_periods DROP CONSTRAINT IF EXISTS billing_periods_period_code_key;
+        ALTER TABLE billing_periods DROP CONSTRAINT IF EXISTS uq_billing_periods_module_code;
+        ALTER TABLE billing_periods ADD CONSTRAINT uq_billing_periods_module_code UNIQUE (module, period_code);
+        CREATE INDEX IF NOT EXISTS idx_billing_periods_module_date ON billing_periods (module, start_date);
         """
     ),
     (

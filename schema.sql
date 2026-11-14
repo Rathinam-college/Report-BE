@@ -48,17 +48,19 @@ CREATE TABLE fiscal_years (
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Monthly Billing Cycles / Periods Master
+-- Monthly Billing Cycles / Periods Master (Scoped by Module)
 CREATE TABLE billing_periods (
     id              SERIAL PRIMARY KEY,
     fiscal_year_id  INT NOT NULL REFERENCES fiscal_years(id) ON DELETE RESTRICT,
-    period_code     VARCHAR(10) NOT NULL UNIQUE,       -- '2026-06', '2026-07'
-    period_label    VARCHAR(20) NOT NULL,              -- "Jun'26", "Jul'26"
+    period_code     VARCHAR(20) NOT NULL,              -- '2026-06', '2026-07'
+    period_label    VARCHAR(50) NOT NULL,              -- "Jun'26", "Jul'26"
     start_date      DATE NOT NULL,                     -- 2026-06-01
     end_date        DATE NOT NULL,                     -- 2026-06-30
     operating_days  INT NOT NULL DEFAULT 30,           -- Days mess operated
     is_closed       BOOLEAN NOT NULL DEFAULT false,
-    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    module          VARCHAR(50) NOT NULL DEFAULT 'food', -- 'food', 'hostel', 'transport'
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_billing_periods_module_code UNIQUE (module, period_code)
 );
 
 -- Vendors & Service Agencies Master

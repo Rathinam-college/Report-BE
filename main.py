@@ -116,6 +116,9 @@ class CostHeadUpdate(BaseModel):
 class ReorderCostHeadsRequest(BaseModel):
     cost_head_ids: List[int]
 
+class BatchDeleteRequest(BaseModel):
+    ids: List[int]
+
 class CategoryCreate(BaseModel):
     name: str
     code: Optional[str] = None
@@ -827,6 +830,38 @@ def delete_cost_head(cost_head_id: int):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/master/cost-heads/batch-delete")
+def batch_delete_cost_heads(req: BatchDeleteRequest):
+    try:
+        if not req.ids:
+            return {"status": "success", "deleted": 0, "deactivated": 0, "message": "No items chosen"}
+        
+        deleted = 0
+        deactivated = 0
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                for ch_id in req.ids:
+                    cur.execute("SELECT COUNT(*) FROM monthly_expense_entries WHERE cost_head_id = %s", (ch_id,))
+                    cnt = cur.fetchone()[0]
+                    if cnt > 0:
+                        cur.execute("UPDATE cost_heads SET is_active = false WHERE id = %s", (ch_id,))
+                        deactivated += 1
+                    else:
+                        cur.execute("DELETE FROM cost_heads WHERE id = %s", (ch_id,))
+                        deleted += 1
+                conn.commit()
+            return {
+                "status": "success",
+                "deleted": deleted,
+                "deactivated": deactivated,
+                "message": f"Successfully deleted {deleted + deactivated} selected line item(s)."
+            }
+        finally:
+            db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/master/categories")
 def get_categories(module: Optional[str] = None):
     try:
@@ -917,6 +952,48 @@ def delete_category(category_id: int):
         else:
             db.execute_commit("DELETE FROM expense_categories WHERE id = %s", (category_id,))
             return {"status": "deleted", "message": "Category permanently deleted."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/master/categories/batch-delete")
+def batch_delete_categories(req: BatchDeleteRequest):
+    try:
+        if not req.ids:
+            return {"status": "success", "deleted": 0, "deactivated": 0, "message": "No categories chosen"}
+        
+        deleted = 0
+        deactivated = 0
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                for cat_id in req.ids:
+                    cur.execute("SELECT id FROM cost_heads WHERE category_id = %s", (cat_id,))
+                    ch_rows = cur.fetchall()
+                    ch_ids = [r[0] for r in ch_rows]
+                    has_entries = False
+                    if ch_ids:
+                        placeholders = ','.join(['%s'] * len(ch_ids))
+                        cur.execute(f"SELECT COUNT(*) FROM monthly_expense_entries WHERE cost_head_id IN ({placeholders})", tuple(ch_ids))
+                        if cur.fetchone()[0] > 0:
+                            has_entries = True
+                    
+                    if has_entries:
+                        cur.execute("UPDATE expense_categories SET is_active = false WHERE id = %s", (cat_id,))
+                        cur.execute("UPDATE cost_heads SET is_active = false WHERE category_id = %s", (cat_id,))
+                        deactivated += 1
+                    else:
+                        cur.execute("DELETE FROM cost_heads WHERE category_id = %s", (cat_id,))
+                        cur.execute("DELETE FROM expense_categories WHERE id = %s", (cat_id,))
+                        deleted += 1
+                conn.commit()
+            return {
+                "status": "success",
+                "deleted": deleted,
+                "deactivated": deactivated,
+                "message": f"Successfully deleted {deleted + deactivated} selected category(ies)."
+            }
+        finally:
+            db.release_db_connection(conn)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

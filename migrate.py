@@ -298,6 +298,14 @@ def run_migrations():
     print("=" * 60)
     print(f"Migration completed successfully! ({success_count}/{len(MIGRATION_STEPS)} steps verified)")
     print("=" * 60)
+
+    try:
+        import seed_modules
+        seed_modules.seed_segregated_data()
+        print("  [OK] Segregated Module Data Verified (Food, Hostel, Transport)")
+    except Exception as e:
+        print(f"  [WARNING] Segregated Data Seeding skipped: {e}")
+
     return True
 
 if __name__ == "__main__":

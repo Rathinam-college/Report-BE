@@ -116,6 +116,9 @@ class CostHeadUpdate(BaseModel):
 class ReorderCostHeadsRequest(BaseModel):
     cost_head_ids: List[int]
 
+class ReorderCategoriesRequest(BaseModel):
+    category_ids: List[int]
+
 class BatchDeleteRequest(BaseModel):
     ids: List[int]
 
@@ -992,6 +995,25 @@ def batch_delete_categories(req: BatchDeleteRequest):
                 "deactivated": deactivated,
                 "message": f"Successfully deleted {deleted + deactivated} selected category(ies)."
             }
+        finally:
+            db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/master/categories/reorder")
+@app.post("/api/master/reorder-categories")
+def reorder_categories(req: ReorderCategoriesRequest):
+    """
+    Updates the display order of categories following a drag-and-drop or move step event.
+    """
+    try:
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                for idx, cat_id in enumerate(req.category_ids, start=1):
+                    cur.execute("UPDATE expense_categories SET display_order = %s WHERE id = %s", (idx, cat_id))
+                conn.commit()
+                return {"status": "success", "message": "Categories reordered successfully in database"}
         finally:
             db.release_db_connection(conn)
     except Exception as e:

@@ -279,12 +279,13 @@ def create_period(req: PeriodCreate):
 
         if req.clone_from_period_id:
             clone_sql = """
-            INSERT INTO monthly_expense_entries (period_id, cost_head_id, vendor_id, amount, remarks, status)
-            SELECT %s, cost_head_id, vendor_id, amount, 'Cloned from baseline', 'draft'
+            INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, vendor_id, amount, remarks, status)
+            SELECT %s, %s, cost_head_id, vendor_id, amount, 'Cloned from baseline', 'draft'
             FROM monthly_expense_entries
-            WHERE period_id = %s;
+            WHERE period_id = %s
+            ON CONFLICT (module, period_id, cost_head_id) DO NOTHING;
             """
-            db.execute_commit(clone_sql, (new_period["id"], req.clone_from_period_id))
+            db.execute_commit(clone_sql, (mod, new_period["id"], req.clone_from_period_id))
 
             if mod == "hostel":
                 db.execute_commit("""
@@ -471,7 +472,13 @@ def get_matrix(module: str = "food"):
                 ORDER BY ch.display_order
             """)
 
-        entries = db.execute_query("SELECT cost_head_id, period_id, amount, remarks FROM monthly_expense_entries")
+        if module and module != "all":
+            entries = db.execute_query(
+                "SELECT cost_head_id, period_id, amount, remarks FROM monthly_expense_entries WHERE module = %s",
+                (module,)
+            )
+        else:
+            entries = db.execute_query("SELECT cost_head_id, period_id, amount, remarks FROM monthly_expense_entries")
         entry_map = {}
         for e in entries:
             entry_map[(e["cost_head_id"], e["period_id"])] = {
@@ -926,21 +933,22 @@ def batch_save_workstation_data(req: BatchSaveRequest):
                 if req.operating_days is not None:
                     cur.execute("UPDATE billing_periods SET operating_days = %s WHERE id = %s", (req.operating_days, req.period_id))
                 
+                mod = req.module or "food"
                 for item in req.entries:
                     upsert_sql = """
-                    INSERT INTO monthly_expense_entries (period_id, cost_head_id, vendor_id, amount, remarks, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (period_id, cost_head_id)
+                    INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, vendor_id, amount, remarks, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (module, period_id, cost_head_id)
                     DO UPDATE SET
                         amount = EXCLUDED.amount,
                         vendor_id = EXCLUDED.vendor_id,
                         remarks = EXCLUDED.remarks,
                         updated_at = CURRENT_TIMESTAMP;
                     """
-                    cur.execute(upsert_sql, (req.period_id, item.cost_head_id, item.vendor_id, item.amount, item.remarks))
+                    cur.execute(upsert_sql, (mod, req.period_id, item.cost_head_id, item.vendor_id, item.amount, item.remarks))
 
-                # Update dining census (Students count, Staff count, Others, Total Persons, Production count)
-                if any(v is not None for v in [req.active_students, req.active_staff, req.others_count, req.total_persons, req.production_meals]):
+                # Update dining census ONLY for food module
+                if mod == "food" and any(v is not None for v in [req.active_students, req.active_staff, req.others_count, req.total_persons, req.production_meals]):
                     students = req.active_students if req.active_students is not None else 0
                     staff = req.active_staff if req.active_staff is not None else 0
                     others = req.others_count if req.others_count is not None else 0

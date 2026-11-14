@@ -102,9 +102,10 @@ CREATE TABLE cost_heads (
 -- 4. ENTRY DATA TABLES (PERIODIC TRANSACTIONS)
 -- ------------------------------------------------------------
 
--- Monthly Financial Expense Entries (Direct Ledger)
+-- Monthly Financial Expense Entries (Direct Ledger, Segregated by Module)
 CREATE TABLE monthly_expense_entries (
     id              BIGSERIAL PRIMARY KEY,
+    module          VARCHAR(50) NOT NULL DEFAULT 'food', -- 'food', 'hostel', 'transport'
     period_id       INT NOT NULL REFERENCES billing_periods(id) ON DELETE RESTRICT,
     cost_head_id    INT NOT NULL REFERENCES cost_heads(id) ON DELETE RESTRICT,
     vendor_id       INT REFERENCES vendors(id) ON DELETE SET NULL,
@@ -115,8 +116,18 @@ CREATE TABLE monthly_expense_entries (
     audited_at      TIMESTAMP,
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_period_cost_head UNIQUE (period_id, cost_head_id)
+    CONSTRAINT uq_module_period_cost_head UNIQUE (module, period_id, cost_head_id)
 );
+
+-- Module-Specific Segregated Entry Views
+CREATE OR REPLACE VIEW food_expense_entries AS
+SELECT * FROM monthly_expense_entries WHERE module = 'food';
+
+CREATE OR REPLACE VIEW hostel_expense_entries AS
+SELECT * FROM monthly_expense_entries WHERE module = 'hostel';
+
+CREATE OR REPLACE VIEW transport_expense_entries AS
+SELECT * FROM monthly_expense_entries WHERE module = 'transport';
 
 -- Student & Staff Dining Census / Attendance (For Per-Head Metrics)
 CREATE TABLE dining_census_entries (

@@ -112,10 +112,11 @@ MIGRATION_STEPS = [
         """
     ),
     (
-        "Monthly Expense Entries Table",
+        "Monthly Expense Entries Table & Module Segregation",
         """
         CREATE TABLE IF NOT EXISTS monthly_expense_entries (
             id SERIAL PRIMARY KEY,
+            module VARCHAR(50) NOT NULL DEFAULT 'food',
             period_id INT NOT NULL REFERENCES billing_periods(id) ON DELETE CASCADE,
             cost_head_id INT NOT NULL REFERENCES cost_heads(id) ON DELETE CASCADE,
             vendor_id INT REFERENCES vendors(id) ON DELETE SET NULL,
@@ -126,6 +127,25 @@ MIGRATION_STEPS = [
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT uq_period_cost_head UNIQUE (period_id, cost_head_id)
         );
+        ALTER TABLE monthly_expense_entries ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';
+        UPDATE monthly_expense_entries m
+        SET module = bp.module
+        FROM billing_periods bp
+        WHERE m.period_id = bp.id AND (m.module IS NULL OR m.module = 'food');
+        ALTER TABLE monthly_expense_entries DROP CONSTRAINT IF EXISTS uq_period_cost_head;
+        ALTER TABLE monthly_expense_entries DROP CONSTRAINT IF EXISTS uq_module_period_cost_head;
+        ALTER TABLE monthly_expense_entries ADD CONSTRAINT uq_module_period_cost_head UNIQUE (module, period_id, cost_head_id);
+        CREATE INDEX IF NOT EXISTS idx_monthly_expense_entries_mod_period ON monthly_expense_entries (module, period_id);
+        
+        -- Segregated Entry Views per Module
+        CREATE OR REPLACE VIEW food_expense_entries AS
+        SELECT * FROM monthly_expense_entries WHERE module = 'food';
+
+        CREATE OR REPLACE VIEW hostel_expense_entries AS
+        SELECT * FROM monthly_expense_entries WHERE module = 'hostel';
+
+        CREATE OR REPLACE VIEW transport_expense_entries AS
+        SELECT * FROM monthly_expense_entries WHERE module = 'transport';
         """
     ),
     (

@@ -83,6 +83,8 @@ class SpreadsheetSaveRequest(BaseModel):
     updated_categories: Optional[List[Dict[str, Any]]] = None
     new_cost_heads: Optional[List[Dict[str, Any]]] = None
     census_by_period: Optional[Dict[str, Dict[str, Any]]] = None
+    hostel_census_by_period: Optional[Dict[str, Dict[str, Any]]] = None
+    transport_census_by_period: Optional[Dict[str, Dict[str, Any]]] = None
 
 class ClonePeriodRequest(BaseModel):
     source_period_id: int
@@ -1641,6 +1643,26 @@ def spreadsheet_save_all(req: SpreadsheetSaveRequest):
                             """, (p_id, s, st, o, tot, prod))
                         except (ValueError, TypeError):
                             continue
+
+                # 6. Save multi-period hostel census (for hostel module)
+                if req.hostel_census_by_period:
+                    for p_id_str, hc_data in req.hostel_census_by_period.items():
+                        try:
+                            p_id = int(p_id_str)
+                            if hc_data:
+                                compute_and_upsert_hostel_census(cur, p_id, hc_data)
+                        except Exception as h_err:
+                            print(f"[Hostel Census Save Notice] period {p_id_str}: {h_err}")
+
+                # 7. Save multi-period transport census (for transport module)
+                if req.transport_census_by_period:
+                    for p_id_str, tc_data in req.transport_census_by_period.items():
+                        try:
+                            p_id = int(p_id_str)
+                            if tc_data:
+                                compute_and_upsert_transport_census(cur, p_id, tc_data)
+                        except Exception as t_err:
+                            print(f"[Transport Census Save Notice] period {p_id_str}: {t_err}")
 
                 conn.commit()
                 return {

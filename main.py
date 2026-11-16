@@ -54,6 +54,7 @@ def ensure_schema_compatibility():
         "ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';",
         "ALTER TABLE billing_periods ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';",
         "ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS custom_metrics JSONB DEFAULT '{}'::jsonb;",
+        "ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS custom_metrics JSONB DEFAULT '{}'::jsonb;",
         """
         CREATE TABLE IF NOT EXISTS hostel_master_parameters (
             id SERIAL PRIMARY KEY,
@@ -62,6 +63,22 @@ def ensure_schema_compatibility():
             section VARCHAR(100) NOT NULL,
             section_order INT NOT NULL DEFAULT 1,
             input_type VARCHAR(50) NOT NULL DEFAULT 'boys_girls_total',
+            unit VARCHAR(50) DEFAULT '',
+            formula TEXT DEFAULT NULL,
+            display_order INT NOT NULL DEFAULT 1,
+            is_system BOOLEAN NOT NULL DEFAULT FALSE,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS transport_master_parameters (
+            id SERIAL PRIMARY KEY,
+            param_key VARCHAR(100) UNIQUE NOT NULL,
+            param_name VARCHAR(255) NOT NULL,
+            section VARCHAR(100) NOT NULL,
+            section_order INT NOT NULL DEFAULT 1,
+            input_type VARCHAR(50) NOT NULL DEFAULT 'cost',
             unit VARCHAR(50) DEFAULT '',
             formula TEXT DEFAULT NULL,
             display_order INT NOT NULL DEFAULT 1,
@@ -850,6 +867,16 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
                     k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
                     for k, v in tr.items()
                 }
+                c_metrics = tr.get("custom_metrics") or {}
+                if isinstance(c_metrics, str):
+                    try:
+                        c_metrics = json.loads(c_metrics)
+                    except Exception:
+                        c_metrics = {}
+                if isinstance(c_metrics, dict):
+                    for ck, cv in c_metrics.items():
+                        if ck not in conv:
+                            conv[ck] = cv
                 transport_census_by_branch.setdefault(b, {})[p_str] = conv
 
             if module == "transport" and branch and branch != "all" and branch in transport_census_by_branch:
@@ -1843,6 +1870,151 @@ def delete_hostel_parameter(param_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 # -------------------------------------------------------------
+# TRANSPORT MASTER PARAMETERS CRUD ENDPOINTS
+# -------------------------------------------------------------
+@app.get("/api/transport/parameters")
+def get_transport_parameters():
+    """
+    Returns active transport master parameters grouped into sections.
+    """
+    try:
+        rows = db.execute_query(
+            """
+            SELECT id, param_key, param_name, section, section_order,
+                   input_type, unit, formula, display_order, is_system, is_active
+            FROM transport_master_parameters
+            WHERE is_active = TRUE
+            ORDER BY section_order ASC, display_order ASC, id ASC;
+            """
+        )
+        return rows or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/transport/parameters")
+def create_transport_parameter(req: Dict[str, Any]):
+    """
+    Creates a new transport parameter row in Master Data.
+    """
+    try:
+        param_name = (req.get("param_name") or "").strip()
+        if not param_name:
+            raise HTTPException(status_code=400, detail="Parameter name is required")
+
+        section = (req.get("section") or "Custom Parameters").strip()
+        section_order = int(req.get("section_order") or 8)
+        input_type = (req.get("input_type") or "cost").strip()
+        unit = (req.get("unit") or "").strip()
+        formula = req.get("formula") or None
+        display_order = int(req.get("display_order") or 50)
+
+        base_key = re.sub(r'[^a-z0-9_]', '', param_name.lower().replace(' ', '_'))
+        if not base_key:
+            base_key = f"param_{int(datetime.now().timestamp())}"
+        param_key = base_key
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM transport_master_parameters WHERE param_key = %s;", (param_key,))
+                if cur.fetchone():
+                    param_key = f"{base_key}_{int(datetime.now().timestamp())}"
+
+                cur.execute(
+                    """
+                    INSERT INTO transport_master_parameters (
+                        param_key, param_name, section, section_order,
+                        input_type, unit, formula, display_order, is_system, is_active
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
+                    RETURNING id, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
+                    """,
+                    (param_key, param_name, section, section_order, input_type, unit, formula, display_order)
+                )
+                new_row = cur.fetchone()
+                conn.commit()
+                col_names = [d[0] for d in cur.description]
+                res_dict = dict(zip(col_names, new_row))
+                return {
+                    "status": "success",
+                    "message": f"Created transport parameter '{param_name}' successfully",
+                    "parameter": res_dict
+                }
+        finally:
+            db.release_db_connection(conn)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/transport/parameters/{param_id}")
+def update_transport_parameter(param_id: int, req: Dict[str, Any]):
+    """
+    Updates an existing transport parameter.
+    """
+    try:
+        fields = []
+        vals = []
+        if "param_name" in req:
+            fields.append("param_name = %s")
+            vals.append(str(req["param_name"]).strip())
+        if "section" in req:
+            fields.append("section = %s")
+            vals.append(str(req["section"]).strip())
+        if "section_order" in req:
+            fields.append("section_order = %s")
+            vals.append(int(req["section_order"]))
+        if "input_type" in req:
+            fields.append("input_type = %s")
+            vals.append(str(req["input_type"]).strip())
+        if "unit" in req:
+            fields.append("unit = %s")
+            vals.append(str(req["unit"]).strip())
+        if "formula" in req:
+            fields.append("formula = %s")
+            vals.append(req["formula"])
+        if "display_order" in req:
+            fields.append("display_order = %s")
+            vals.append(int(req["display_order"]))
+        if "is_active" in req:
+            fields.append("is_active = %s")
+            vals.append(bool(req["is_active"]))
+
+        if not fields:
+            return {"status": "success", "message": "No changes requested"}
+
+        vals.append(param_id)
+        query = f"UPDATE transport_master_parameters SET {', '.join(fields)} WHERE id = %s RETURNING id, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;"
+        row = db.execute_query(query, tuple(vals), fetch_all=False)
+        if not row:
+            raise HTTPException(status_code=404, detail="Transport parameter not found")
+        return {
+            "status": "success",
+            "message": "Transport parameter updated successfully",
+            "parameter": row
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/transport/parameters/{param_id}")
+def delete_transport_parameter(param_id: int):
+    """
+    Soft-deletes or removes a transport parameter.
+    """
+    try:
+        param = db.execute_query("SELECT id, is_system FROM transport_master_parameters WHERE id = %s;", (param_id,), fetch_all=False)
+        if not param:
+            raise HTTPException(status_code=404, detail="Transport parameter not found")
+
+        db.execute_commit("UPDATE transport_master_parameters SET is_active = FALSE WHERE id = %s;", (param_id,))
+        return {"status": "success", "message": "Transport parameter removed successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# -------------------------------------------------------------
 # HOSTEL CENSUS CALCULATION & PERSISTENCE HELPER
 # -------------------------------------------------------------
 def _clean_num(val, default=0.0):
@@ -2165,14 +2337,14 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
 
     vehicles_count = str(get_f("vehicles_count", "18+1"))
     passengers_count = int(_clean_num(get_f("passengers_count", 447)))
-    students_count = int(_clean_num(get_f("students_count", 412)))
-    staff_count = int(_clean_num(get_f("staff_count", 35)))
+    students_count = int(_clean_num(get_f("students_count", get_f("students_count_income", get_f("students_count_fee", 412)))))
+    staff_count = int(_clean_num(get_f("staff_count", get_f("staff_count_income", 35))))
 
     approved_kms = float(_clean_num(get_f("approved_kms", 26691.0)))
     actual_kms = float(_clean_num(get_f("actual_kms", 25777.0)))
     additional_kms = float(_clean_num(get_f("additional_kms", 2481.0)))
-    excess_kms_rps = float(_clean_num(get_f("excess_kms_rps", 0.0)))
-    excess_km_billed_rps = float(_clean_num(get_f("excess_km_billed_rps", 0.0)))
+    excess_kms_rps = float(_clean_num(get_f("excess_minus_kms_rps", get_f("excess_kms_rps", 0.0))))
+    excess_km_billed_rps = float(_clean_num(get_f("excess_kms_billed_rps", get_f("excess_km_billed_rps", 0.0))))
 
     fuel_expenses = float(_clean_num(get_f("fuel_expenses", 487375.0)))
     diesel_litres = float(_clean_num(get_f("diesel_litres", 5184.84)))
@@ -2185,9 +2357,9 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
     # Row 15: Total Expenses = SUM(fuel + fc + statutory + repair + employee + other)
     total_expenses = fuel_expenses + fc_cost + statutory_cost + repair_maintenance_cost + employee_cost + other_cost
 
-    fee_demand = float(_clean_num(get_f("fee_demand", 0.0)))
+    fee_demand = float(_clean_num(get_f("fee_demand", get_f("demand_fee", 0.0))))
     fee_discount = float(_clean_num(get_f("fee_discount", 0.0)))
-    fee_collected = float(_clean_num(get_f("fee_collected", 0.0)))
+    fee_collected = float(_clean_num(get_f("fee_collected", get_f("paid_fee", 0.0))))
     fee_unpaid = max(0.0, fee_demand - fee_discount - fee_collected)
 
     rps_monthly_billing = float(_clean_num(get_f("rps_monthly_billing", 0.0)))
@@ -2224,6 +2396,29 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
     diesel_per_100km = round((diesel_litres / actual_kms) * 100.0, 2) if actual_kms > 0 else 0.0
 
     remarks = str(tc.get("remarks") if "remarks" in tc else existing.get("remarks", ""))
+    
+    # Harvest custom metrics from tc
+    custom_metrics = dict(tc.get("custom_metrics") or {}) if isinstance(tc.get("custom_metrics"), dict) else {}
+    known_keys = {
+        "id", "period_id", "branch", "created_at", "vehicles_count", "passengers_count", "students_count", "staff_count",
+        "approved_kms", "actual_kms", "additional_kms", "excess_kms_rps", "excess_km_billed_rps",
+        "excess_minus_kms_rps", "excess_kms_billed_rps", "students_count_income", "staff_count_income",
+        "students_count_fee", "demand_fee", "paid_fee",
+        "fuel_expenses", "diesel_litres", "fc_cost", "statutory_cost",
+        "repair_maintenance_cost", "employee_cost", "other_cost", "total_expenses",
+        "fee_demand", "fee_discount", "fee_collected", "fee_unpaid",
+        "rps_monthly_billing", "staff_travel_deduction", "additional_kms_billed_rps", "additional_kms_others_billing", "cab_billing", "cumulative_income",
+        "approved_budget", "cumulative_budget_spent", "balance",
+        "service_tickets_raised", "service_tickets_closed", "service_tickets_open",
+        "quality_issues_received", "quality_issues_closed", "quality_issues_open",
+        "statutory_compliance", "incidents_count",
+        "per_student_cost_expenses", "per_student_fee_year", "demand_per_km_day", "km_per_veh_day",
+        "fuel_cost_per_km", "diesel_per_100km", "remarks", "custom_metrics"
+    }
+    for k, v in tc.items():
+        if k not in known_keys and not k.startswith("temp_"):
+            custom_metrics[k] = v
+    custom_metrics_json = json.dumps(custom_metrics)
 
     tc_sql = """
     INSERT INTO transport_census_entries (
@@ -2238,7 +2433,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         quality_issues_received, quality_issues_closed, quality_issues_open,
         statutory_compliance, incidents_count,
         per_student_cost_expenses, per_student_fee_year, demand_per_km_day, km_per_veh_day,
-        fuel_cost_per_km, diesel_per_100km, remarks
+        fuel_cost_per_km, diesel_per_100km, remarks, custom_metrics
     ) VALUES (
         %s, %s, %s, %s, %s, %s,
         %s, %s, %s, %s, %s,
@@ -2251,7 +2446,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         %s, %s, %s,
         %s, %s,
         %s, %s, %s, %s,
-        %s, %s, %s
+        %s, %s, %s, %s
     )
     ON CONFLICT (period_id, branch) DO UPDATE SET
         vehicles_count = EXCLUDED.vehicles_count,
@@ -2298,7 +2493,8 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         km_per_veh_day = EXCLUDED.km_per_veh_day,
         fuel_cost_per_km = EXCLUDED.fuel_cost_per_km,
         diesel_per_100km = EXCLUDED.diesel_per_100km,
-        remarks = EXCLUDED.remarks;
+        remarks = EXCLUDED.remarks,
+        custom_metrics = EXCLUDED.custom_metrics;
     """
     cur.execute(tc_sql, (
         period_id, b_val, vehicles_count, passengers_count, students_count, staff_count,
@@ -2312,7 +2508,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         quality_issues_received, quality_issues_closed, quality_issues_open,
         statutory_compliance, incidents_count,
         per_student_cost_expenses, per_student_fee_year, demand_per_km_day, km_per_veh_day,
-        fuel_cost_per_km, diesel_per_100km, remarks
+        fuel_cost_per_km, diesel_per_100km, remarks, custom_metrics_json
     ))
 
 # -------------------------------------------------------------
@@ -2616,6 +2812,38 @@ def get_transport_branches():
             {"id": "University", "code": "University", "label": "University Fleet", "description": "Rathinam University Main Fleet", "icon": "🎓"},
         ]
     }
+
+@app.get("/api/transport-census/{period_id}")
+def get_transport_census_direct(period_id: int, branch: Optional[str] = "Common"):
+    """
+    Returns the transport census entries & operational metrics for a specific period and branch.
+    """
+    try:
+        b_val = branch or "Common"
+        row = db.execute_query(
+            "SELECT * FROM transport_census_entries WHERE period_id = %s AND branch = %s;",
+            (period_id, b_val),
+            fetch_all=False
+        )
+        if not row:
+            return {}
+        clean = {
+            k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
+            for k, v in row.items()
+        }
+        c_metrics = row.get("custom_metrics") or {}
+        if isinstance(c_metrics, str):
+            try:
+                c_metrics = json.loads(c_metrics)
+            except Exception:
+                c_metrics = {}
+        if isinstance(c_metrics, dict):
+            for ck, cv in c_metrics.items():
+                if ck not in clean:
+                    clean[ck] = cv
+        return clean
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/transport-census/{period_id}")
 def save_transport_census_direct(period_id: int, req: Dict[str, Any]):

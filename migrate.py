@@ -325,6 +325,23 @@ MIGRATION_STEPS = [
         ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS diesel_per_100km NUMERIC(10, 2) DEFAULT 0.00;
         ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS cab_billing NUMERIC(12, 2) DEFAULT 0.00;
         """
+    ),
+    (
+        "Category Formulas Table",
+        """
+        CREATE TABLE IF NOT EXISTS category_formulas (
+            id SERIAL PRIMARY KEY,
+            module VARCHAR(50) NOT NULL DEFAULT 'food',
+            name VARCHAR(255) NOT NULL,
+            expression TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            unit_type VARCHAR(20) DEFAULT 'currency',
+            display_order INT DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_cat_formulas_module ON category_formulas(module);
+        """
     )
 ]
 

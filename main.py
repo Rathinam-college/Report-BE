@@ -148,6 +148,21 @@ class CategoryUpdate(BaseModel):
     is_active: Optional[bool] = True
     module: Optional[str] = None
 
+class CategoryFormulaCreate(BaseModel):
+    module: Optional[str] = "food"
+    name: str
+    expression: str
+    description: Optional[str] = ""
+    unit_type: Optional[str] = "currency"
+    display_order: Optional[int] = 0
+
+class CategoryFormulaUpdate(BaseModel):
+    name: Optional[str] = None
+    expression: Optional[str] = None
+    description: Optional[str] = None
+    unit_type: Optional[str] = None
+    display_order: Optional[int] = None
+
 class UserCreate(BaseModel):
     username: str
     full_name: str
@@ -1088,6 +1103,93 @@ def reorder_categories(req: ReorderCategoriesRequest):
                 return {"status": "success", "message": "Categories reordered successfully in database"}
         finally:
             db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# -------------------------------------------------------------
+# CATEGORY FORMULAS & FUNCTIONS CRUD
+# -------------------------------------------------------------
+@app.get("/api/master/category-formulas")
+def get_category_formulas(module: Optional[str] = None):
+    try:
+        query = "SELECT * FROM category_formulas"
+        params = []
+        if module:
+            query += " WHERE LOWER(module) = %s"
+            params.append(module.lower())
+        query += " ORDER BY display_order ASC, id ASC;"
+        res = db.execute_query(query, params)
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/master/category-formulas")
+def create_category_formula(req: CategoryFormulaCreate):
+    try:
+        mod = (req.module or "food").lower()
+        query = """
+            INSERT INTO category_formulas (module, name, expression, description, unit_type, display_order)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id, module, name, expression, description, unit_type, display_order, created_at, updated_at;
+        """
+        row = db.execute_query(query, (
+            mod,
+            req.name.strip(),
+            req.expression.strip(),
+            req.description or "",
+            req.unit_type or "currency",
+            req.display_order or 0
+        ), fetch_all=False)
+        return row
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/master/category-formulas/{formula_id}")
+def update_category_formula(formula_id: int, req: CategoryFormulaUpdate):
+    try:
+        updates = []
+        params = []
+        if req.name is not None:
+            updates.append("name = %s")
+            params.append(req.name.strip())
+        if req.expression is not None:
+            updates.append("expression = %s")
+            params.append(req.expression.strip())
+        if req.description is not None:
+            updates.append("description = %s")
+            params.append(req.description)
+        if req.unit_type is not None:
+            updates.append("unit_type = %s")
+            params.append(req.unit_type)
+        if req.display_order is not None:
+            updates.append("display_order = %s")
+            params.append(req.display_order)
+
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields provided to update")
+
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        query = f"UPDATE category_formulas SET {', '.join(updates)} WHERE id = %s RETURNING id, module, name, expression, description, unit_type, display_order, created_at, updated_at;"
+        params.append(formula_id)
+        row = db.execute_query(query, params, fetch_all=False)
+        if not row:
+            raise HTTPException(status_code=404, detail="Formula not found")
+        return row
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/master/category-formulas/{formula_id}")
+def delete_category_formula(formula_id: int):
+    try:
+        query = "DELETE FROM category_formulas WHERE id = %s RETURNING id;"
+        row = db.execute_query(query, (formula_id,), fetch_all=False)
+        if not row:
+            raise HTTPException(status_code=404, detail="Formula not found")
+        return {"status": "success", "message": "Formula deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

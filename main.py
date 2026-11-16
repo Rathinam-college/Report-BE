@@ -455,6 +455,42 @@ def create_period(req: PeriodCreate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
+@app.post("/api/periods/batch-delete")
+def batch_delete_periods(req: Dict[str, Any]):
+    """
+    Batch delete multiple selected billing periods in a single transaction.
+    """
+    period_ids = req.get("period_ids") or req.get("ids") or []
+    if not period_ids:
+        raise HTTPException(status_code=400, detail="No billing period IDs provided for deletion")
+
+    try:
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                p_tuple = tuple(int(x) for x in period_ids)
+                cur.execute("DELETE FROM monthly_expense_entries WHERE period_id IN %s", (p_tuple,))
+                cur.execute("DELETE FROM dining_census_entries WHERE period_id IN %s", (p_tuple,))
+                cur.execute("DELETE FROM utility_meter_logs WHERE period_id IN %s", (p_tuple,))
+                cur.execute("DELETE FROM hostel_census_entries WHERE period_id IN %s", (p_tuple,))
+                cur.execute("DELETE FROM transport_census_entries WHERE period_id IN %s", (p_tuple,))
+                cur.execute("DELETE FROM billing_periods WHERE id IN %s RETURNING id, period_label", (p_tuple,))
+                deleted_rows = cur.fetchall()
+                conn.commit()
+                deleted_labels = [r[1] for r in deleted_rows]
+                return {
+                    "status": "success",
+                    "message": f"Successfully deleted {len(deleted_labels)} billing cycle(s): {', '.join(deleted_labels)}",
+                    "deleted_count": len(deleted_labels),
+                    "deleted_ids": [r[0] for r in deleted_rows]
+                }
+        finally:
+            db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.put("/api/periods/{period_id}")
 def update_period(period_id: int, req: PeriodUpdate):
     """
@@ -492,10 +528,12 @@ def delete_period(period_id: int):
         conn = db.get_db_connection()
         try:
             with conn.cursor() as cur:
-                # First delete dependent entries
+                # Delete dependent entries across all modules
                 cur.execute("DELETE FROM monthly_expense_entries WHERE period_id = %s", (period_id,))
                 cur.execute("DELETE FROM dining_census_entries WHERE period_id = %s", (period_id,))
                 cur.execute("DELETE FROM utility_meter_logs WHERE period_id = %s", (period_id,))
+                cur.execute("DELETE FROM hostel_census_entries WHERE period_id = %s", (period_id,))
+                cur.execute("DELETE FROM transport_census_entries WHERE period_id = %s", (period_id,))
                 cur.execute("DELETE FROM billing_periods WHERE id = %s RETURNING period_label", (period_id,))
                 row = cur.fetchone()
                 if not row:
@@ -508,6 +546,8 @@ def delete_period(period_id: int):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
 
 # -------------------------------------------------------------
 # CORE ANALYTICAL REPORTING & DYNAMIC MATRIX

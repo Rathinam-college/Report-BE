@@ -145,8 +145,8 @@ class CategoryUpdate(BaseModel):
     name: str
     code: Optional[str] = None
     display_order: Optional[int] = None
-    is_active: bool = True
-    module: Optional[str] = "food"
+    is_active: Optional[bool] = True
+    module: Optional[str] = None
 
 class UserCreate(BaseModel):
     username: str
@@ -907,10 +907,27 @@ def get_categories(module: Optional[str] = None):
 @app.post("/api/master/categories")
 def create_category(req: CategoryCreate):
     try:
+        name = req.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Category name cannot be empty")
+
         code = req.code
         if not code or not code.strip():
-            clean = re.sub(r'[^a-zA-Z0-9]+', '_', req.name).strip('_').upper()
+            clean = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').upper()
+            if not clean:
+                clean = "EXPENSE"
             code = f"CAT_{clean[:20]}"
+        else:
+            code = code.strip().upper()
+
+        # Ensure unique code to prevent duplicate key constraint violations
+        existing = db.execute_query("SELECT id FROM expense_categories WHERE code = %s", (code,), fetch_all=False)
+        counter = 1
+        base_code = code
+        while existing:
+            code = f"{base_code[:16]}_{counter}"
+            existing = db.execute_query("SELECT id FROM expense_categories WHERE code = %s", (code,), fetch_all=False)
+            counter += 1
 
         display_order = req.display_order
         if display_order is None:
@@ -923,17 +940,60 @@ def create_category(req: CategoryCreate):
         VALUES (%s, %s, %s, true, %s) 
         RETURNING id, name, code, display_order, module;
         """
-        cat = db.execute_query(insert_sql, (req.name.strip(), code, display_order, mod), fetch_all=False)
-        return {"status": "success", "category": cat}
+        cat = db.execute_query(insert_sql, (name, code, display_order, mod), fetch_all=False)
+        return {
+            "status": "success",
+            "message": f"Category '{name}' created successfully",
+            "category": cat
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/master/categories/{category_id}")
 def update_category(category_id: int, req: CategoryUpdate):
     try:
-        update_sql = "UPDATE expense_categories SET name = %s, display_order = COALESCE(%s, display_order), is_active = %s WHERE id = %s;"
-        db.execute_commit(update_sql, (req.name.strip(), req.display_order, req.is_active, category_id))
-        return {"status": "success", "message": "Category updated successfully"}
+        existing = db.execute_query(
+            "SELECT id, name, code, display_order, is_active, module FROM expense_categories WHERE id = %s",
+            (category_id,),
+            fetch_all=False
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Category ID {category_id} not found")
+
+        name = req.name.strip() if req.name and req.name.strip() else existing["name"]
+        display_order = req.display_order if req.display_order is not None else existing["display_order"]
+        is_active = req.is_active if req.is_active is not None else existing["is_active"]
+        module = req.module.strip() if (req.module and req.module.strip()) else existing["module"]
+
+        code = existing["code"]
+        if req.code and req.code.strip():
+            new_code = req.code.strip().upper()
+            if new_code != existing["code"]:
+                dup = db.execute_query(
+                    "SELECT id FROM expense_categories WHERE code = %s AND id != %s",
+                    (new_code, category_id),
+                    fetch_all=False
+                )
+                if dup:
+                    raise HTTPException(status_code=400, detail=f"Category code '{new_code}' is already in use by another category")
+                code = new_code
+
+        update_sql = """
+        UPDATE expense_categories 
+        SET name = %s, code = %s, display_order = %s, is_active = %s, module = %s 
+        WHERE id = %s
+        RETURNING id, name, code, display_order, is_active, module;
+        """
+        updated = db.execute_query(update_sql, (name, code, display_order, is_active, module, category_id), fetch_all=False)
+        return {
+            "status": "success",
+            "message": f"Category '{name}' updated successfully",
+            "category": updated
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

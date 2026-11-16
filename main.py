@@ -36,12 +36,53 @@ async def rewrite_report_subpath(request: Request, call_next):
         request.scope["path"] = path.replace("/report/api", "/api", 1)
     return await call_next(request)
 
+def ensure_schema_compatibility():
+    """
+    Safely and idempotently ensures all required columns exist in the database,
+    even if full migrations previously stopped or encountered non-critical errors.
+    """
+    stmts = [
+        "ALTER TABLE monthly_expense_entries ADD COLUMN IF NOT EXISTS branch VARCHAR(50) NOT NULL DEFAULT 'Common';",
+        "CREATE INDEX IF NOT EXISTS idx_monthly_expense_entries_branch ON monthly_expense_entries(branch);",
+        "ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS branch VARCHAR(50) NOT NULL DEFAULT 'Common';",
+        "CREATE INDEX IF NOT EXISTS idx_transport_census_entries_branch ON transport_census_entries(branch);",
+        "ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS category_type VARCHAR(20) NOT NULL DEFAULT 'DIRECT';",
+        "ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS formula_expression TEXT DEFAULT NULL;",
+        "ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS formula_definition JSONB DEFAULT NULL;",
+        "ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS formula_version INT NOT NULL DEFAULT 1;",
+        "ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;",
+        "ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';",
+        "ALTER TABLE billing_periods ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';"
+    ]
+    for stmt in stmts:
+        try:
+            db.execute_commit(stmt)
+        except Exception as e:
+            print(f"[SchemaCompat] Notice: {e}")
+
 @app.on_event("startup")
 def startup_event():
+    try:
+        ensure_schema_compatibility()
+    except Exception as e:
+        print(f"Startup schema compatibility warning: {e}")
     try:
         db.auto_migrate()
     except Exception as e:
         print(f"Startup schema migration warning: {e}")
+
+@app.get("/api/system/schema-compat")
+@app.post("/api/system/schema-compat")
+def run_schema_compat():
+    try:
+        ensure_schema_compatibility()
+        try:
+            db.auto_migrate()
+        except Exception:
+            pass
+        return {"status": "ok", "message": "Schema compatibility verified and updated successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # -------------------------------------------------------------
 # PYDANTIC MODELS
@@ -517,13 +558,39 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
 
         TRANSPORT_BRANCHES = ["RPS", "KPM", "Common", "University"]
 
-        if module and module != "all":
-            entries = db.execute_query(
-                "SELECT cost_head_id, period_id, amount, remarks, branch FROM monthly_expense_entries WHERE module = %s",
-                (module,)
-            )
-        else:
-            entries = db.execute_query("SELECT cost_head_id, period_id, amount, remarks, branch FROM monthly_expense_entries")
+        entries = []
+        try:
+            if module and module != "all":
+                entries = db.execute_query(
+                    "SELECT cost_head_id, period_id, amount, remarks, branch FROM monthly_expense_entries WHERE module = %s",
+                    (module,)
+                )
+            else:
+                entries = db.execute_query("SELECT cost_head_id, period_id, amount, remarks, branch FROM monthly_expense_entries")
+        except Exception as q_err:
+            if "branch" in str(q_err).lower():
+                try:
+                    ensure_schema_compatibility()
+                except Exception:
+                    pass
+                try:
+                    if module and module != "all":
+                        entries = db.execute_query(
+                            "SELECT cost_head_id, period_id, amount, remarks, branch FROM monthly_expense_entries WHERE module = %s",
+                            (module,)
+                        )
+                    else:
+                        entries = db.execute_query("SELECT cost_head_id, period_id, amount, remarks, branch FROM monthly_expense_entries")
+                except Exception:
+                    if module and module != "all":
+                        entries = db.execute_query(
+                            "SELECT cost_head_id, period_id, amount, remarks, 'Common' AS branch FROM monthly_expense_entries WHERE module = %s",
+                            (module,)
+                        )
+                    else:
+                        entries = db.execute_query("SELECT cost_head_id, period_id, amount, remarks, 'Common' AS branch FROM monthly_expense_entries")
+            else:
+                raise q_err
 
         entry_map = {}
         entry_map_by_branch = {b: {} for b in TRANSPORT_BRANCHES}

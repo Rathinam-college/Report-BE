@@ -1920,7 +1920,7 @@ def get_transport_parameters():
     try:
         rows = db.execute_query(
             """
-            SELECT id, param_key, param_name, section, section_order,
+            SELECT id, s_no, param_key, param_name, section, section_order,
                    input_type, unit, formula, display_order, is_system, is_active
             FROM transport_master_parameters
             WHERE is_active = TRUE
@@ -1941,12 +1941,15 @@ def create_transport_parameter(req: Dict[str, Any]):
         if not param_name:
             raise HTTPException(status_code=400, detail="Parameter name is required")
 
+        s_no = str(req.get("s_no") or "").strip()
         section = (req.get("section") or "Custom Parameters").strip()
         section_order = int(req.get("section_order") or 8)
         input_type = (req.get("input_type") or "cost").strip()
         unit = (req.get("unit") or "").strip()
         formula = req.get("formula") or None
         display_order = int(req.get("display_order") or 50)
+        if not s_no:
+            s_no = str(display_order)
 
         base_key = re.sub(r'[^a-z0-9_]', '', param_name.lower().replace(' ', '_'))
         if not base_key:
@@ -1963,12 +1966,12 @@ def create_transport_parameter(req: Dict[str, Any]):
                 cur.execute(
                     """
                     INSERT INTO transport_master_parameters (
-                        param_key, param_name, section, section_order,
+                        s_no, param_key, param_name, section, section_order,
                         input_type, unit, formula, display_order, is_system, is_active
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
-                    RETURNING id, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
+                    RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
                     """,
-                    (param_key, param_name, section, section_order, input_type, unit, formula, display_order)
+                    (s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order)
                 )
                 new_row = cur.fetchone()
                 conn.commit()
@@ -1994,6 +1997,9 @@ def update_transport_parameter(param_id: int, req: Dict[str, Any]):
     try:
         fields = []
         vals = []
+        if "s_no" in req:
+            fields.append("s_no = %s")
+            vals.append(str(req["s_no"]).strip())
         if "param_name" in req:
             fields.append("param_name = %s")
             vals.append(str(req["param_name"]).strip())
@@ -2023,7 +2029,7 @@ def update_transport_parameter(param_id: int, req: Dict[str, Any]):
             return {"status": "success", "message": "No changes requested"}
 
         vals.append(param_id)
-        query = f"UPDATE transport_master_parameters SET {', '.join(fields)} WHERE id = %s RETURNING id, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;"
+        query = f"UPDATE transport_master_parameters SET {', '.join(fields)} WHERE id = %s RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;"
         row = db.execute_query(query, tuple(vals), fetch_all=False)
         if not row:
             raise HTTPException(status_code=404, detail="Transport parameter not found")
@@ -2047,7 +2053,11 @@ def delete_transport_parameter(param_id: int):
         if not param:
             raise HTTPException(status_code=404, detail="Transport parameter not found")
 
-        db.execute_commit("UPDATE transport_master_parameters SET is_active = FALSE WHERE id = %s;", (param_id,))
+        # Non-system custom parameters can be removed completely
+        if param and not param.get("is_system"):
+            db.execute_commit("DELETE FROM transport_master_parameters WHERE id = %s;", (param_id,))
+        else:
+            db.execute_commit("UPDATE transport_master_parameters SET is_active = FALSE WHERE id = %s;", (param_id,))
         return {"status": "success", "message": "Transport parameter removed successfully"}
     except HTTPException:
         raise

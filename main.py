@@ -52,7 +52,24 @@ def ensure_schema_compatibility():
         "ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS formula_version INT NOT NULL DEFAULT 1;",
         "ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;",
         "ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';",
-        "ALTER TABLE billing_periods ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';"
+        "ALTER TABLE billing_periods ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';",
+        "ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS custom_metrics JSONB DEFAULT '{}'::jsonb;",
+        """
+        CREATE TABLE IF NOT EXISTS hostel_master_parameters (
+            id SERIAL PRIMARY KEY,
+            param_key VARCHAR(100) UNIQUE NOT NULL,
+            param_name VARCHAR(255) NOT NULL,
+            section VARCHAR(100) NOT NULL,
+            section_order INT NOT NULL DEFAULT 1,
+            input_type VARCHAR(50) NOT NULL DEFAULT 'boys_girls_total',
+            unit VARCHAR(50) DEFAULT '',
+            formula TEXT DEFAULT NULL,
+            display_order INT NOT NULL DEFAULT 1,
+            is_system BOOLEAN NOT NULL DEFAULT FALSE,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
     ]
     for stmt in stmts:
         try:
@@ -799,10 +816,21 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
         try:
             h_rows = db.execute_query("SELECT * FROM hostel_census_entries")
             for hr in h_rows:
-                hostel_census_data[str(hr["period_id"])] = {
+                h_dict = {
                     k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
                     for k, v in hr.items()
                 }
+                c_metrics = hr.get("custom_metrics") or {}
+                if isinstance(c_metrics, str):
+                    try:
+                        c_metrics = json.loads(c_metrics)
+                    except Exception:
+                        c_metrics = {}
+                if isinstance(c_metrics, dict):
+                    for ck, cv in c_metrics.items():
+                        if ck not in h_dict:
+                            h_dict[ck] = cv
+                hostel_census_data[str(hr["period_id"])] = h_dict
         except Exception as he:
             print(f"[Hostel Census Query Notice] {he}")
 
@@ -1602,6 +1630,153 @@ def delete_category_formula(formula_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 # -------------------------------------------------------------
+# HOSTEL MASTER PARAMETERS CRUD ENDPOINTS
+# -------------------------------------------------------------
+@app.get("/api/hostel/parameters")
+def get_hostel_parameters():
+    """
+    Returns the list of active hostel master parameters grouped into sections.
+    """
+    try:
+        rows = db.execute_query(
+            """
+            SELECT id, param_key, param_name, section, section_order,
+                   input_type, unit, formula, display_order, is_system, is_active
+            FROM hostel_master_parameters
+            WHERE is_active = TRUE
+            ORDER BY section_order ASC, display_order ASC, id ASC;
+            """
+        )
+        return rows or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/hostel/parameters")
+def create_hostel_parameter(req: Dict[str, Any]):
+    """
+    Creates a new hostel parameter row in Master Data.
+    """
+    try:
+        param_name = (req.get("param_name") or "").strip()
+        if not param_name:
+            raise HTTPException(status_code=400, detail="Parameter name is required")
+
+        section = (req.get("section") or "Custom Parameters").strip()
+        section_order = int(req.get("section_order") or 7)
+        input_type = (req.get("input_type") or "cost").strip()
+        unit = (req.get("unit") or "").strip()
+        formula = req.get("formula") or None
+        display_order = int(req.get("display_order") or 50)
+
+        # Generate a safe unique param_key
+        base_key = re.sub(r'[^a-z0-9_]', '', param_name.lower().replace(' ', '_'))
+        if not base_key:
+            base_key = f"param_{int(datetime.now().timestamp())}"
+        param_key = base_key
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                # Check collision
+                cur.execute("SELECT id FROM hostel_master_parameters WHERE param_key = %s;", (param_key,))
+                if cur.fetchone():
+                    param_key = f"{base_key}_{int(datetime.now().timestamp())}"
+
+                cur.execute(
+                    """
+                    INSERT INTO hostel_master_parameters (
+                        param_key, param_name, section, section_order,
+                        input_type, unit, formula, display_order, is_system, is_active
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
+                    RETURNING id, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
+                    """,
+                    (param_key, param_name, section, section_order, input_type, unit, formula, display_order)
+                )
+                new_row = cur.fetchone()
+                conn.commit()
+                col_names = [d[0] for d in cur.description]
+                res_dict = dict(zip(col_names, new_row))
+                return {
+                    "status": "success",
+                    "message": f"Created parameter '{param_name}' successfully",
+                    "parameter": res_dict
+                }
+        finally:
+            db.release_db_connection(conn)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/hostel/parameters/{param_id}")
+def update_hostel_parameter(param_id: int, req: Dict[str, Any]):
+    """
+    Updates an existing hostel parameter (name, section, formula, input_type, display_order).
+    """
+    try:
+        fields = []
+        vals = []
+        if "param_name" in req:
+            fields.append("param_name = %s")
+            vals.append(str(req["param_name"]).strip())
+        if "section" in req:
+            fields.append("section = %s")
+            vals.append(str(req["section"]).strip())
+        if "section_order" in req:
+            fields.append("section_order = %s")
+            vals.append(int(req["section_order"]))
+        if "input_type" in req:
+            fields.append("input_type = %s")
+            vals.append(str(req["input_type"]).strip())
+        if "unit" in req:
+            fields.append("unit = %s")
+            vals.append(str(req["unit"]).strip())
+        if "formula" in req:
+            fields.append("formula = %s")
+            vals.append(req["formula"])
+        if "display_order" in req:
+            fields.append("display_order = %s")
+            vals.append(int(req["display_order"]))
+        if "is_active" in req:
+            fields.append("is_active = %s")
+            vals.append(bool(req["is_active"]))
+
+        if not fields:
+            return {"status": "success", "message": "No changes requested"}
+
+        vals.append(param_id)
+        query = f"UPDATE hostel_master_parameters SET {', '.join(fields)} WHERE id = %s RETURNING id, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;"
+        row = db.execute_query(query, tuple(vals), fetch_all=False)
+        if not row:
+            raise HTTPException(status_code=404, detail="Hostel parameter not found")
+        return {
+            "status": "success",
+            "message": "Hostel parameter updated successfully",
+            "parameter": row
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/hostel/parameters/{param_id}")
+def delete_hostel_parameter(param_id: int):
+    """
+    Soft-deletes or removes a hostel parameter.
+    """
+    try:
+        param = db.execute_query("SELECT id, is_system FROM hostel_master_parameters WHERE id = %s;", (param_id,), fetch_all=False)
+        if not param:
+            raise HTTPException(status_code=404, detail="Parameter not found")
+
+        db.execute_commit("UPDATE hostel_master_parameters SET is_active = FALSE WHERE id = %s;", (param_id,))
+        return {"status": "success", "message": "Parameter removed successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# -------------------------------------------------------------
 # HOSTEL CENSUS CALCULATION & PERSISTENCE HELPER
 # -------------------------------------------------------------
 def _clean_num(val, default=0.0):
@@ -1721,10 +1896,39 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
     dw_day_ltr = round(dw_ltr / occ_tot / 30.0, 2) if occ_tot > 0 else 0.0
     dw_day_c = round(dw_cost / occ_tot / 30.0, 2) if occ_tot > 0 else 0.0
 
-    remarks = str(get_f("remarks", ""))
-    dw_day_c = round(dw_cost / occ_tot / 30.0, 2) if occ_tot > 0 else 0.0
-
     remarks = str(hc.get("remarks") or "")
+
+    custom_metrics = hc.get("custom_metrics")
+    if not isinstance(custom_metrics, dict):
+        custom_metrics = existing.get("custom_metrics") or {}
+        if isinstance(custom_metrics, str):
+            try:
+                custom_metrics = json.loads(custom_metrics)
+            except Exception:
+                custom_metrics = {}
+    if not isinstance(custom_metrics, dict):
+        custom_metrics = {}
+
+    for k, v in hc.items():
+        if k not in (
+            "id", "period_id", "created_at", "bed_capacity_boys", "bed_capacity_girls", "bed_capacity_total",
+            "students_boys", "students_girls", "students_total", "staff_boys", "staff_girls", "staff_total",
+            "total_occupied_boys", "total_occupied_girls", "total_occupied", "vacant_boys", "vacant_girls",
+            "vacant_total", "vacant_college_boys", "vacant_college_girls", "vacant_college", "vacant_sports_boys",
+            "vacant_sports_girls", "vacant_sports_total", "vacant_school_boys", "vacant_school_girls",
+            "vacant_school_total", "occupied_pct_boys", "occupied_pct_girls", "occupied_pct", "vacant_pct_boys",
+            "vacant_pct_girls", "vacant_pct", "students_vacated", "tickets_received", "tickets_closed",
+            "tickets_open", "total_hours_close", "tat_hours", "quality_issues_received", "quality_issues_closed",
+            "quality_issues_open", "incidents_count", "power_units", "power_cost", "water_purchase_cost",
+            "maintenance_expenses", "expenses_occurred", "approved_budget", "cumulative_budget_spent", "balance",
+            "normal_water_litres", "normal_water_cost", "drinking_water_litres", "drinking_water_cost", "sq_feet",
+            "per_student_cost_month", "per_student_cost_day", "sq_feet_per_occupant", "normal_water_student_ltrs",
+            "normal_water_student_cost", "power_cost_sqft", "units_per_occupant", "power_cost_occupant",
+            "normal_water_ltr_day", "normal_water_cost_day", "drinking_water_ltr_day", "drinking_water_cost_day",
+            "remarks", "custom_metrics"
+        ) and not k.startswith("temp_"):
+            custom_metrics[k] = v
+    custom_metrics_json = json.dumps(custom_metrics)
 
     hc_sql = """
     INSERT INTO hostel_census_entries (
@@ -1751,7 +1955,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         power_cost_sqft, units_per_occupant, power_cost_occupant,
         normal_water_ltr_day, normal_water_cost_day,
         drinking_water_ltr_day, drinking_water_cost_day,
-        remarks
+        remarks, custom_metrics
     ) VALUES (
         %s, %s, %s, %s,
         %s, %s, %s,
@@ -1776,7 +1980,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         %s, %s, %s,
         %s, %s,
         %s, %s,
-        %s
+        %s, %s
     )
     ON CONFLICT (period_id) DO UPDATE SET
         bed_capacity_boys = EXCLUDED.bed_capacity_boys,
@@ -1844,7 +2048,8 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         normal_water_cost_day = EXCLUDED.normal_water_cost_day,
         drinking_water_ltr_day = EXCLUDED.drinking_water_ltr_day,
         drinking_water_cost_day = EXCLUDED.drinking_water_cost_day,
-        remarks = EXCLUDED.remarks;
+        remarks = EXCLUDED.remarks,
+        custom_metrics = EXCLUDED.custom_metrics;
     """
     cur.execute(hc_sql, (
         period_id, bc_b, bc_g, bc_tot,
@@ -1870,7 +2075,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         p_sqft, p_occ_u, p_occ_c,
         nw_day_ltr, nw_day_c,
         dw_day_ltr, dw_day_c,
-        remarks
+        remarks, custom_metrics_json
     ))
 
 def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any], branch: str = "Common"):

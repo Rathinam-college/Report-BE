@@ -368,6 +368,32 @@ MIGRATION_STEPS = [
         ALTER TABLE transport_census_entries ADD CONSTRAINT uq_transport_census_period_branch UNIQUE (period_id, branch);
         CREATE INDEX IF NOT EXISTS idx_transport_census_entries_branch ON transport_census_entries(branch);
         """
+    ),
+    (
+        "Transport Fleet Master Parameters Table & S.No Support",
+        """
+        CREATE TABLE IF NOT EXISTS transport_master_parameters (
+            id SERIAL PRIMARY KEY,
+            s_no VARCHAR(20) DEFAULT '',
+            param_key VARCHAR(100) NOT NULL UNIQUE,
+            param_name VARCHAR(255) NOT NULL,
+            section VARCHAR(100) NOT NULL,
+            section_order INT NOT NULL DEFAULT 1,
+            input_type VARCHAR(50) NOT NULL DEFAULT 'cost',
+            unit VARCHAR(50) DEFAULT '',
+            formula TEXT DEFAULT NULL,
+            display_order INT NOT NULL DEFAULT 50,
+            is_system BOOLEAN NOT NULL DEFAULT FALSE,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        ALTER TABLE transport_master_parameters ADD COLUMN IF NOT EXISTS s_no VARCHAR(20) DEFAULT '';
+        CREATE INDEX IF NOT EXISTS idx_transport_master_params_section ON transport_master_parameters(section);
+        CREATE INDEX IF NOT EXISTS idx_transport_master_params_active ON transport_master_parameters(is_active);
+
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS custom_metrics JSONB DEFAULT '{}'::jsonb;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS branch VARCHAR(50) DEFAULT 'Common';
+        """
     )
 ]
 
@@ -403,6 +429,13 @@ def run_migrations():
     print("=" * 60)
     print(f"Migration completed successfully! ({success_count}/{len(MIGRATION_STEPS)} steps verified)")
     print("=" * 60)
+
+    try:
+        import seed_transport_canonical
+        seed_transport_canonical.ensure_and_seed_transport_parameters()
+        print("  [OK] Transport Master Parameters Seeded & Verified")
+    except Exception as te:
+        print(f"  [WARNING] Transport Master Parameters Seeding skipped: {te}")
 
     try:
         import seed_modules

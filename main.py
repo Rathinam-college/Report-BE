@@ -1916,8 +1916,27 @@ def delete_hostel_parameter(param_id: int):
 def get_transport_parameters():
     """
     Returns active transport master parameters grouped into sections.
+    Self-heals and seeds parameters if table is missing or unpopulated in production.
     """
     try:
+        rows = db.execute_query(
+            """
+            SELECT id, s_no, param_key, param_name, section, section_order,
+                   input_type, unit, formula, display_order, is_system, is_active
+            FROM transport_master_parameters
+            WHERE is_active = TRUE
+            ORDER BY section_order ASC, display_order ASC, id ASC;
+            """
+        )
+        if rows and len(rows) > 0:
+            return rows
+    except Exception as query_err:
+        print(f"[TransportParameters] Notice on query: {query_err}. Running self-healing sync...")
+
+    # Auto-heal: Ensure table exists and 47 canonical parameters are seeded
+    try:
+        import seed_transport_canonical
+        seed_transport_canonical.ensure_and_seed_transport_parameters()
         rows = db.execute_query(
             """
             SELECT id, s_no, param_key, param_name, section, section_order,

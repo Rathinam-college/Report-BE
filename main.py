@@ -5,9 +5,11 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from decimal import Decimal
 import re
+import json
 import bcrypt
 import database as db
 import system_manager
+import formula_engine as fe
 
 app = FastAPI(
     title="Rathinam Report & Analytics API",
@@ -140,13 +142,21 @@ class CategoryCreate(BaseModel):
     code: Optional[str] = None
     display_order: Optional[int] = None
     module: Optional[str] = "food"
+    category_type: Optional[str] = "DIRECT"  # 'DIRECT' | 'FORMULA'
+    formula_expression: Optional[str] = None
+    formula_definition: Optional[Dict[str, Any]] = None
+    formula_version: Optional[int] = 1
 
 class CategoryUpdate(BaseModel):
-    name: str
+    name: Optional[str] = None
     code: Optional[str] = None
     display_order: Optional[int] = None
     is_active: Optional[bool] = True
     module: Optional[str] = None
+    category_type: Optional[str] = None
+    formula_expression: Optional[str] = None
+    formula_definition: Optional[Dict[str, Any]] = None
+    formula_version: Optional[int] = None
 
 class CategoryFormulaCreate(BaseModel):
     module: Optional[str] = "food"
@@ -480,7 +490,7 @@ def get_matrix(module: str = "food"):
 
         if module and module != "all":
             categories = db.execute_query(
-                "SELECT id, code, name, display_order, module FROM expense_categories WHERE is_active = true AND module = %s ORDER BY display_order",
+                "SELECT id, code, name, display_order, module, category_type, formula_expression, formula_definition FROM expense_categories WHERE is_active = true AND module = %s ORDER BY display_order",
                 (module,)
             )
             cost_heads = db.execute_query("""
@@ -493,7 +503,7 @@ def get_matrix(module: str = "food"):
             """, (module,))
         else:
             categories = db.execute_query(
-                "SELECT id, code, name, display_order, module FROM expense_categories WHERE is_active = true ORDER BY display_order"
+                "SELECT id, code, name, display_order, module, category_type, formula_expression, formula_definition FROM expense_categories WHERE is_active = true ORDER BY display_order"
             )
             cost_heads = db.execute_query("""
                 SELECT ch.id, ch.category_id, ch.name, ch.code, ch.cost_behavior, ch.display_order, ch.default_vendor_id, v.name AS vendor_name
@@ -573,11 +583,21 @@ def get_matrix(module: str = "food"):
 
             cat_avg = round(cat_total / num_periods, 2)
 
+            f_def = cat.get("formula_definition")
+            if isinstance(f_def, str):
+                try:
+                    f_def = json.loads(f_def)
+                except Exception:
+                    f_def = None
+
             categories_data.append({
                 "category_id": cat_id,
                 "category_name": cat["name"],
                 "category_code": cat["code"],
                 "display_order": cat["display_order"],
+                "category_type": cat.get("category_type") or "DIRECT",
+                "formula_expression": cat.get("formula_expression"),
+                "formula_definition": f_def,
                 "items": formatted_items,
                 "subtotal": {
                     "amounts": {str(k): round(v, 2) for k, v in cat_subtotal_by_period.items()},
@@ -585,6 +605,49 @@ def get_matrix(module: str = "food"):
                     "avg": cat_avg
                 }
             })
+
+        # Dynamically evaluate FORMULA categories across all periods using safe formula engine
+        period_cat_values = {p["id"]: {} for p in periods}
+        for cdata in categories_data:
+            cid = cdata["category_id"]
+            cname = cdata["category_name"].strip().lower()
+            for p in periods:
+                pid = p["id"]
+                val = cdata["subtotal"]["amounts"].get(str(pid), 0.0)
+                period_cat_values[pid][cid] = val
+                period_cat_values[pid][cname] = val
+
+        formula_cats = [c for c in categories_data if c.get("category_type") == "FORMULA"]
+        # Multi-pass evaluation to safely resolve chained formula dependencies (e.g. C = A + B, D = C * 0.18)
+        max_passes = max(1, len(formula_cats))
+        for _ in range(max_passes):
+            for fcat in formula_cats:
+                fdef = fcat.get("formula_definition")
+                fc_id = fcat["category_id"]
+                fc_name = fcat["category_name"].strip().lower()
+                for p in periods:
+                    pid = p["id"]
+                    val = fe.evaluate_formula(fdef, period_cat_values[pid])
+                    val = round(val, 2)
+                    fcat["subtotal"]["amounts"][str(pid)] = val
+                    period_cat_values[pid][fc_id] = val
+                    period_cat_values[pid][fc_name] = val
+                    if fcat["items"]:
+                        fcat["items"][0]["amounts"][str(pid)] = val
+
+        for fcat in formula_cats:
+            fc_total = 0.0
+            for p in periods:
+                pid = p["id"]
+                val = fcat["subtotal"]["amounts"].get(str(pid), 0.0)
+                fc_total += val
+                grand_total_by_period[pid] += val
+                overall_grand_total += val
+            fcat["subtotal"]["total"] = round(fc_total, 2)
+            fcat["subtotal"]["avg"] = round(fc_total / num_periods, 2)
+            if fcat["items"]:
+                fcat["items"][0]["total"] = round(fc_total, 2)
+                fcat["items"][0]["avg"] = round(fc_total / num_periods, 2)
 
         grand_total_data = {
             "amounts": {str(k): round(v, 2) for k, v in grand_total_by_period.items()},
@@ -895,27 +958,41 @@ def batch_delete_cost_heads(req: BatchDeleteRequest):
 @app.get("/api/master/categories")
 def get_categories(module: Optional[str] = None):
     try:
+        select_cols = """
+            c.id, c.code, c.name, c.display_order, c.is_active, c.module,
+            c.category_type, c.formula_expression, c.formula_definition, c.formula_version, c.updated_at,
+            COUNT(ch.id) AS cost_head_count
+        """
+        group_cols = """
+            c.id, c.code, c.name, c.display_order, c.is_active, c.module,
+            c.category_type, c.formula_expression, c.formula_definition, c.formula_version, c.updated_at
+        """
         if module and module != "all":
-            return db.execute_query("""
-                SELECT 
-                    c.id, c.code, c.name, c.display_order, c.is_active, c.module,
-                    COUNT(ch.id) AS cost_head_count
+            cats = db.execute_query(f"""
+                SELECT {select_cols}
                 FROM expense_categories c
                 LEFT JOIN cost_heads ch ON c.id = ch.category_id AND ch.is_active = true
                 WHERE c.is_active = true AND c.module = %s
-                GROUP BY c.id, c.code, c.name, c.display_order, c.is_active, c.module
+                GROUP BY {group_cols}
                 ORDER BY c.display_order;
             """, (module,))
-        return db.execute_query("""
-            SELECT 
-                c.id, c.code, c.name, c.display_order, c.is_active, c.module,
-                COUNT(ch.id) AS cost_head_count
-            FROM expense_categories c
-            LEFT JOIN cost_heads ch ON c.id = ch.category_id AND ch.is_active = true
-            WHERE c.is_active = true
-            GROUP BY c.id, c.code, c.name, c.display_order, c.is_active, c.module
-            ORDER BY c.display_order;
-        """)
+        else:
+            cats = db.execute_query(f"""
+                SELECT {select_cols}
+                FROM expense_categories c
+                LEFT JOIN cost_heads ch ON c.id = ch.category_id AND ch.is_active = true
+                WHERE c.is_active = true
+                GROUP BY {group_cols}
+                ORDER BY c.display_order;
+            """)
+        for cat in cats:
+            fdef = cat.get("formula_definition")
+            if isinstance(fdef, str):
+                try:
+                    cat["formula_definition"] = json.loads(fdef)
+                except Exception:
+                    cat["formula_definition"] = None
+        return cats
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -950,12 +1027,55 @@ def create_category(req: CategoryCreate):
             display_order = max_row["next_order"] if max_row else 10
 
         mod = req.module or "food"
+        cat_type = (req.category_type or "DIRECT").upper()
+        if cat_type not in ("DIRECT", "FORMULA"):
+            cat_type = "DIRECT"
+
+        formula_expr = req.formula_expression.strip() if req.formula_expression else None
+        formula_def = req.formula_definition
+
+        if cat_type == "FORMULA":
+            if not formula_expr:
+                raise HTTPException(status_code=400, detail="Formula expression is required for formula-based category")
+            
+            all_cats = db.execute_query("SELECT id, name, code, category_type, formula_definition FROM expense_categories WHERE is_active = true")
+            try:
+                norm_expr, id_expr, cat_ids, cat_names = fe.normalize_expression(formula_expr, all_cats)
+                has_cycle, cycle_err = fe.detect_circular_dependencies(all_cats, None, cat_ids)
+                if has_cycle:
+                    raise HTTPException(status_code=400, detail=cycle_err or "Circular dependency detected")
+                
+                # Test parse to tokens and rpn to ensure valid syntax
+                tokens = fe.tokenize(id_expr)
+                fe.to_rpn(tokens)
+                
+                formula_def = {
+                    "raw_expression": formula_expr,
+                    "normalized_expression": norm_expr,
+                    "id_expression": id_expr,
+                    "category_ids": cat_ids,
+                    "category_names": cat_names
+                }
+                formula_expr = norm_expr
+            except fe.FormulaError as fe_err:
+                raise HTTPException(status_code=400, detail=str(fe_err))
+
+        f_def_json = json.dumps(formula_def) if formula_def else None
+
         insert_sql = """
-        INSERT INTO expense_categories (name, code, display_order, is_active, module) 
-        VALUES (%s, %s, %s, true, %s) 
-        RETURNING id, name, code, display_order, module;
+        INSERT INTO expense_categories (name, code, display_order, is_active, module, category_type, formula_expression, formula_definition, formula_version) 
+        VALUES (%s, %s, %s, true, %s, %s, %s, %s, %s) 
+        RETURNING id, name, code, display_order, module, category_type, formula_expression, formula_definition, formula_version;
         """
-        cat = db.execute_query(insert_sql, (name, code, display_order, mod), fetch_all=False)
+        cat = db.execute_query(insert_sql, (name, code, display_order, mod, cat_type, formula_expr, f_def_json, req.formula_version or 1), fetch_all=False)
+
+        # Automatically create a default line item so it appears in spreadsheets and matrix
+        db.execute_commit("""
+            INSERT INTO cost_heads (category_id, name, code, cost_behavior, display_order, is_active)
+            VALUES (%s, %s, %s, 'fixed', 1, true)
+            ON CONFLICT DO NOTHING
+        """, (cat["id"], name, f"{code}_HEAD"))
+
         return {
             "status": "success",
             "message": f"Category '{name}' created successfully",
@@ -970,7 +1090,7 @@ def create_category(req: CategoryCreate):
 def update_category(category_id: int, req: CategoryUpdate):
     try:
         existing = db.execute_query(
-            "SELECT id, name, code, display_order, is_active, module FROM expense_categories WHERE id = %s",
+            "SELECT id, name, code, display_order, is_active, module, category_type, formula_expression, formula_definition FROM expense_categories WHERE id = %s",
             (category_id,),
             fetch_all=False
         )
@@ -981,6 +1101,7 @@ def update_category(category_id: int, req: CategoryUpdate):
         display_order = req.display_order if req.display_order is not None else existing["display_order"]
         is_active = req.is_active if req.is_active is not None else existing["is_active"]
         module = req.module.strip() if (req.module and req.module.strip()) else existing["module"]
+        cat_type = req.category_type.upper() if req.category_type else (existing.get("category_type") or "DIRECT")
 
         code = existing["code"]
         if req.code and req.code.strip():
@@ -995,13 +1116,45 @@ def update_category(category_id: int, req: CategoryUpdate):
                     raise HTTPException(status_code=400, detail=f"Category code '{new_code}' is already in use by another category")
                 code = new_code
 
+        formula_expr = req.formula_expression if req.formula_expression is not None else existing.get("formula_expression")
+        formula_def = req.formula_definition if req.formula_definition is not None else existing.get("formula_definition")
+
+        if cat_type == "FORMULA":
+            if not formula_expr or not formula_expr.strip():
+                raise HTTPException(status_code=400, detail="Formula expression is required for formula-based category")
+            
+            all_cats = db.execute_query("SELECT id, name, code, category_type, formula_definition FROM expense_categories WHERE is_active = true AND id != %s", (category_id,))
+            try:
+                norm_expr, id_expr, cat_ids, cat_names = fe.normalize_expression(formula_expr, all_cats)
+                has_cycle, cycle_err = fe.detect_circular_dependencies(all_cats, category_id, cat_ids)
+                if has_cycle:
+                    raise HTTPException(status_code=400, detail=cycle_err or "Circular dependency detected")
+                
+                # Test parse to tokens and rpn
+                tokens = fe.tokenize(id_expr)
+                fe.to_rpn(tokens)
+                
+                formula_def = {
+                    "raw_expression": formula_expr,
+                    "normalized_expression": norm_expr,
+                    "id_expression": id_expr,
+                    "category_ids": cat_ids,
+                    "category_names": cat_names
+                }
+                formula_expr = norm_expr
+            except fe.FormulaError as fe_err:
+                raise HTTPException(status_code=400, detail=str(fe_err))
+
+        f_def_json = json.dumps(formula_def) if (formula_def and isinstance(formula_def, dict)) else (formula_def if isinstance(formula_def, str) else None)
+
         update_sql = """
         UPDATE expense_categories 
-        SET name = %s, code = %s, display_order = %s, is_active = %s, module = %s 
+        SET name = %s, code = %s, display_order = %s, is_active = %s, module = %s,
+            category_type = %s, formula_expression = %s, formula_definition = %s, updated_at = NOW()
         WHERE id = %s
-        RETURNING id, name, code, display_order, is_active, module;
+        RETURNING id, name, code, display_order, is_active, module, category_type, formula_expression, formula_definition, updated_at;
         """
-        updated = db.execute_query(update_sql, (name, code, display_order, is_active, module, category_id), fetch_all=False)
+        updated = db.execute_query(update_sql, (name, code, display_order, is_active, module, cat_type, formula_expr, f_def_json, category_id), fetch_all=False)
         return {
             "status": "success",
             "message": f"Category '{name}' updated successfully",
@@ -1015,9 +1168,39 @@ def update_category(category_id: int, req: CategoryUpdate):
 @app.delete("/api/master/categories/{category_id}")
 def delete_category(category_id: int):
     """
-    Delete or deactivate an expense category. Checks for historical entries first.
+    Delete or deactivate an expense category. Checks for historical entries and formula references first.
     """
     try:
+        # Check if another formula-based category references this category_id
+        cat_row = db.execute_query("SELECT name FROM expense_categories WHERE id = %s", (category_id,), fetch_all=False)
+        if cat_row:
+            cat_name = cat_row["name"]
+            other_formula_cats = db.execute_query("""
+                SELECT id, name, formula_expression, formula_definition 
+                FROM expense_categories 
+                WHERE is_active = true AND id != %s AND category_type = 'FORMULA'
+            """, (category_id,))
+            ref_names = []
+            for ofc in other_formula_cats:
+                fdef = ofc.get("formula_definition")
+                if isinstance(fdef, str):
+                    try:
+                        fdef = json.loads(fdef)
+                    except Exception:
+                        fdef = None
+                if fdef and isinstance(fdef, dict):
+                    cids = fdef.get("category_ids") or []
+                    if category_id in cids:
+                        ref_names.append(ofc["name"])
+                elif ofc.get("formula_expression") and cat_name.lower() in ofc["formula_expression"].lower():
+                    ref_names.append(ofc["name"])
+            
+            if ref_names:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Cannot delete category '{cat_name}' because it is referenced in the formula of: {', '.join(set(ref_names))}. Please update or remove those formulas first."
+                )
+
         cost_heads = db.execute_query("SELECT id FROM cost_heads WHERE category_id = %s", (category_id,))
         if cost_heads:
             ch_ids = [ch["id"] for ch in cost_heads]
@@ -1028,7 +1211,7 @@ def delete_category(category_id: int):
                 fetch_all=False
             )["cnt"]
             if entry_cnt > 0:
-                # Soft deactivate category and associated cost heads to preserve financial integrity
+                # Soft deactivate category and associated cost heads to preserve historical audit trail
                 db.execute_commit("UPDATE expense_categories SET is_active = false WHERE id = %s", (category_id,))
                 db.execute_commit(f"UPDATE cost_heads SET is_active = false WHERE category_id = %s", (category_id,))
                 return {
@@ -1042,6 +1225,8 @@ def delete_category(category_id: int):
         else:
             db.execute_commit("DELETE FROM expense_categories WHERE id = %s", (category_id,))
             return {"status": "deleted", "message": "Category permanently deleted."}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1051,6 +1236,39 @@ def batch_delete_categories(req: BatchDeleteRequest):
         if not req.ids:
             return {"status": "success", "deleted": 0, "deactivated": 0, "message": "No categories chosen"}
         
+        # Check if any chosen category is referenced by another formula category not in req.ids
+        other_formula_cats = db.execute_query("""
+            SELECT id, name, formula_expression, formula_definition 
+            FROM expense_categories 
+            WHERE is_active = true AND category_type = 'FORMULA'
+        """)
+        for cat_id in req.ids:
+            cat_row = db.execute_query("SELECT name FROM expense_categories WHERE id = %s", (cat_id,), fetch_all=False)
+            if not cat_row:
+                continue
+            cat_name = cat_row["name"]
+            for ofc in other_formula_cats:
+                if ofc["id"] in req.ids:
+                    continue  # Both are being deleted
+                fdef = ofc.get("formula_definition")
+                if isinstance(fdef, str):
+                    try:
+                        fdef = json.loads(fdef)
+                    except Exception:
+                        fdef = None
+                if fdef and isinstance(fdef, dict):
+                    cids = fdef.get("category_ids") or []
+                    if cat_id in cids:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Cannot delete category '{cat_name}' because it is referenced in the formula of: {ofc['name']}."
+                        )
+                elif ofc.get("formula_expression") and cat_name.lower() in ofc["formula_expression"].lower():
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Cannot delete category '{cat_name}' because it is referenced in the formula of: {ofc['name']}."
+                    )
+
         deleted = 0
         deactivated = 0
         conn = db.get_db_connection()
@@ -1080,10 +1298,12 @@ def batch_delete_categories(req: BatchDeleteRequest):
                 "status": "success",
                 "deleted": deleted,
                 "deactivated": deactivated,
-                "message": f"Successfully deleted {deleted + deactivated} selected category(ies)."
+                "message": f"Successfully processed {deleted + deactivated} selected category(ies)."
             }
         finally:
             db.release_db_connection(conn)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

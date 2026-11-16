@@ -342,6 +342,17 @@ MIGRATION_STEPS = [
         );
         CREATE INDEX IF NOT EXISTS idx_cat_formulas_module ON category_formulas(module);
         """
+    ),
+    (
+        "Expense Categories Formula Columns",
+        """
+        ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS category_type VARCHAR(20) NOT NULL DEFAULT 'DIRECT';
+        ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS formula_expression TEXT DEFAULT NULL;
+        ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS formula_definition JSONB DEFAULT NULL;
+        ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS formula_version INT NOT NULL DEFAULT 1;
+        ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+        CREATE INDEX IF NOT EXISTS idx_expense_categories_type ON expense_categories(category_type);
+        """
     )
 ]
 

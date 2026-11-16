@@ -240,6 +240,12 @@ def seed_segregated_data():
             pid = t_pids[pcode]
             db.execute_commit(entry_sql, ('transport', pid, ch_id, amt, rem, 'Common'))
 
+    try:
+        import seed_hostel_13months
+        seed_hostel_13months.seed_hostel_13months()
+    except Exception as he:
+        print(f"Hostel 13 months seeding notice: {he}")
+
     print("Segregated data seeded successfully for all 3 modules!")
 
 if __name__ == "__main__":

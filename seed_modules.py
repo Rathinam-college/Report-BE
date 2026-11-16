@@ -162,9 +162,9 @@ def seed_segregated_data():
     }
 
     entry_sql = """
-    INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, amount, remarks, status)
-    VALUES (%s, %s, %s, %s, %s, 'draft')
-    ON CONFLICT (module, period_id, cost_head_id) DO UPDATE SET
+    INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, amount, remarks, status, branch)
+    VALUES (%s, %s, %s, %s, %s, 'draft', %s)
+    ON CONFLICT (module, period_id, cost_head_id, branch) DO UPDATE SET
         amount = EXCLUDED.amount,
         remarks = EXCLUDED.remarks;
     """
@@ -173,7 +173,7 @@ def seed_segregated_data():
         ch_id = h_ch_ids[ch_code]
         for pcode, (amt, rem) in pdata.items():
             pid = h_pids[pcode]
-            db.execute_commit(entry_sql, ('hostel', pid, ch_id, amt, rem))
+            db.execute_commit(entry_sql, ('hostel', pid, ch_id, amt, rem, 'Common'))
 
     # 7. Monthly Expense Entries for Transport
     # Values aligned with transport.xlsx
@@ -238,7 +238,7 @@ def seed_segregated_data():
         ch_id = t_ch_ids[ch_code]
         for pcode, (amt, rem) in pdata.items():
             pid = t_pids[pcode]
-            db.execute_commit(entry_sql, ('transport', pid, ch_id, amt, rem))
+            db.execute_commit(entry_sql, ('transport', pid, ch_id, amt, rem, 'Common'))
 
     print("Segregated data seeded successfully for all 3 modules!")
 

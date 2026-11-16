@@ -75,11 +75,13 @@ class BatchSaveRequest(BaseModel):
     hostel_census: Optional[Dict[str, Any]] = None
     transport_census: Optional[Dict[str, Any]] = None
     module: Optional[str] = "food"
+    branch: Optional[str] = "Common"
     updated_cost_heads: Optional[List[Dict[str, Any]]] = None
     updated_categories: Optional[List[Dict[str, Any]]] = None
 
 class SpreadsheetSaveRequest(BaseModel):
     module: str = "food"
+    branch: Optional[str] = "Common"
     entries_by_period: Optional[Dict[str, List[Dict[str, Any]]]] = None
     updated_cost_heads: Optional[List[Dict[str, Any]]] = None
     updated_categories: Optional[List[Dict[str, Any]]] = None
@@ -323,11 +325,11 @@ def create_period(req: PeriodCreate):
 
         if req.clone_from_period_id:
             clone_sql = """
-            INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, vendor_id, amount, remarks, status)
-            SELECT %s, %s, cost_head_id, vendor_id, amount, 'Cloned from baseline', 'draft'
+            INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, vendor_id, amount, remarks, status, branch)
+            SELECT %s, %s, cost_head_id, vendor_id, amount, 'Cloned from baseline', 'draft', COALESCE(branch, 'Common')
             FROM monthly_expense_entries
             WHERE period_id = %s
-            ON CONFLICT (module, period_id, cost_head_id) DO NOTHING;
+            ON CONFLICT (module, period_id, cost_head_id, branch) DO NOTHING;
             """
             db.execute_commit(clone_sql, (mod, new_period["id"], req.clone_from_period_id))
 
@@ -355,19 +357,19 @@ def create_period(req: PeriodCreate):
             elif mod == "transport":
                 db.execute_commit("""
                 INSERT INTO transport_census_entries (
-                    period_id, vehicles_count, passengers_count, students_count, staff_count,
+                    period_id, branch, vehicles_count, passengers_count, students_count, staff_count,
                     approved_kms, actual_kms, additional_kms, diesel_litres, fuel_expenses,
                     service_tickets_raised, service_tickets_closed, service_tickets_open,
                     quality_issues_received, quality_issues_closed, quality_issues_open,
                     statutory_compliance, incidents_count, approved_budget, cumulative_budget_spent
                 )
-                SELECT %s, vehicles_count, passengers_count, students_count, staff_count,
+                SELECT %s, COALESCE(branch, 'Common'), vehicles_count, passengers_count, students_count, staff_count,
                     approved_kms, actual_kms, additional_kms, diesel_litres, fuel_expenses,
                     service_tickets_raised, service_tickets_closed, service_tickets_open,
                     quality_issues_received, quality_issues_closed, quality_issues_open,
                     statutory_compliance, incidents_count, approved_budget, cumulative_budget_spent
                 FROM transport_census_entries WHERE period_id = %s
-                ON CONFLICT (period_id) DO NOTHING;
+                ON CONFLICT (period_id, branch) DO NOTHING;
                 """, (new_period["id"], req.clone_from_period_id))
 
         return {"status": "success", "period": new_period}
@@ -471,10 +473,10 @@ def get_overview(module: str = "food"):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/matrix")
-def get_matrix(module: str = "food"):
+def get_matrix(module: str = "food", branch: Optional[str] = None):
     """
     Dynamically generates the operational matrix for periods, categories, and active cost heads.
-    Supports filtering by module ('food', 'hostel', 'transport', 'all').
+    Supports filtering by module ('food', 'hostel', 'transport', 'all') and branch for transport.
     """
     try:
         if module and module != "all":
@@ -513,19 +515,55 @@ def get_matrix(module: str = "food"):
                 ORDER BY ch.display_order
             """)
 
+        TRANSPORT_BRANCHES = ["RPS", "KPM", "Common", "University"]
+
         if module and module != "all":
             entries = db.execute_query(
-                "SELECT cost_head_id, period_id, amount, remarks FROM monthly_expense_entries WHERE module = %s",
+                "SELECT cost_head_id, period_id, amount, remarks, branch FROM monthly_expense_entries WHERE module = %s",
                 (module,)
             )
         else:
-            entries = db.execute_query("SELECT cost_head_id, period_id, amount, remarks FROM monthly_expense_entries")
+            entries = db.execute_query("SELECT cost_head_id, period_id, amount, remarks, branch FROM monthly_expense_entries")
+
         entry_map = {}
-        for e in entries:
-            entry_map[(e["cost_head_id"], e["period_id"])] = {
-                "amount": float(e["amount"]),
-                "remarks": e.get("remarks") or ""
-            }
+        entry_map_by_branch = {b: {} for b in TRANSPORT_BRANCHES}
+        matrix_by_branch = {}
+
+        if module == "transport":
+            for e in entries:
+                ch_id = e["cost_head_id"]
+                p_id = e["period_id"]
+                amt = float(e["amount"]) if e["amount"] is not None else 0.0
+                b = e.get("branch") or "Common"
+                entry_map_by_branch.setdefault(b, {})[(ch_id, p_id)] = {
+                    "amount": amt,
+                    "remarks": e.get("remarks") or ""
+                }
+
+            if branch and branch != "all" and branch in entry_map_by_branch:
+                entry_map = entry_map_by_branch[branch]
+            else:
+                # Consolidated: sum of all branches
+                for b in TRANSPORT_BRANCHES:
+                    for (ch_id, p_id), it_data in entry_map_by_branch.get(b, {}).items():
+                        if (ch_id, p_id) not in entry_map:
+                            entry_map[(ch_id, p_id)] = {"amount": 0.0, "remarks": ""}
+                        entry_map[(ch_id, p_id)]["amount"] += it_data["amount"]
+
+            for b in TRANSPORT_BRANCHES:
+                b_map = entry_map_by_branch.get(b, {})
+                matrix_by_branch[b] = {
+                    "amounts": {
+                        f"{ch['id']}_{p['id']}": b_map.get((ch["id"], p["id"]), {}).get("amount", 0.0)
+                        for ch in cost_heads for p in periods
+                    }
+                }
+        else:
+            for e in entries:
+                entry_map[(e["cost_head_id"], e["period_id"])] = {
+                    "amount": float(e["amount"]),
+                    "remarks": e.get("remarks") or ""
+                }
 
         grand_total_by_period = {p["id"]: 0.0 for p in periods}
         overall_grand_total = 0.0
@@ -703,13 +741,92 @@ def get_matrix(module: str = "food"):
 
         # Query Transport Census / Fleet Metrics
         transport_census_data = {}
+        transport_census_by_branch = {b: {} for b in TRANSPORT_BRANCHES}
         try:
             t_rows = db.execute_query("SELECT * FROM transport_census_entries")
             for tr in t_rows:
-                transport_census_data[str(tr["period_id"])] = {
+                b = tr.get("branch") or "Common"
+                p_str = str(tr["period_id"])
+                conv = {
                     k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
                     for k, v in tr.items()
                 }
+                transport_census_by_branch.setdefault(b, {})[p_str] = conv
+
+            if module == "transport" and branch and branch != "all" and branch in transport_census_by_branch:
+                transport_census_data = transport_census_by_branch[branch]
+            else:
+                for p in periods:
+                    p_str = str(p["id"])
+                    c_veh_list = []
+                    tot_passengers = 0
+                    tot_students = 0
+                    tot_staff = 0
+                    tot_approved_kms = 0.0
+                    tot_actual_kms = 0.0
+                    tot_additional_kms = 0.0
+                    tot_diesel_litres = 0.0
+                    tot_fuel_expenses = 0.0
+                    tot_fee_demand = 0.0
+                    tot_fee_collected = 0.0
+                    tot_fee_unpaid = 0.0
+                    tot_approved_budget = 0.0
+                    tot_cumulative_budget_spent = 0.0
+                    tot_tickets_raised = 0
+                    tot_tickets_closed = 0
+                    tot_tickets_open = 0
+                    tot_incidents = 0
+                    has_data = False
+
+                    for b in TRANSPORT_BRANCHES:
+                        b_census = transport_census_by_branch.get(b, {}).get(p_str)
+                        if b_census:
+                            has_data = True
+                            if b_census.get("vehicles_count"):
+                                c_veh_list.append(f"{b}: {b_census['vehicles_count']}")
+                            tot_passengers += int(b_census.get("passengers_count") or 0)
+                            tot_students += int(b_census.get("students_count") or 0)
+                            tot_staff += int(b_census.get("staff_count") or 0)
+                            tot_approved_kms += float(b_census.get("approved_kms") or 0.0)
+                            tot_actual_kms += float(b_census.get("actual_kms") or 0.0)
+                            tot_additional_kms += float(b_census.get("additional_kms") or 0.0)
+                            tot_diesel_litres += float(b_census.get("diesel_litres") or 0.0)
+                            tot_fuel_expenses += float(b_census.get("fuel_expenses") or 0.0)
+                            tot_fee_demand += float(b_census.get("fee_demand") or 0.0)
+                            tot_fee_collected += float(b_census.get("fee_collected") or 0.0)
+                            tot_fee_unpaid += float(b_census.get("fee_unpaid") or 0.0)
+                            tot_approved_budget += float(b_census.get("approved_budget") or 0.0)
+                            tot_cumulative_budget_spent += float(b_census.get("cumulative_budget_spent") or 0.0)
+                            tot_tickets_raised += int(b_census.get("service_tickets_raised") or 0)
+                            tot_tickets_closed += int(b_census.get("service_tickets_closed") or 0)
+                            tot_tickets_open += int(b_census.get("service_tickets_open") or 0)
+                            tot_incidents += int(b_census.get("incidents_count") or 0)
+
+                    if has_data:
+                        transport_census_data[p_str] = {
+                            "vehicles_count": " / ".join(c_veh_list) if c_veh_list else "64 fleet",
+                            "passengers_count": tot_passengers,
+                            "students_count": tot_students,
+                            "staff_count": tot_staff,
+                            "approved_kms": round(tot_approved_kms, 2),
+                            "actual_kms": round(tot_actual_kms, 2),
+                            "additional_kms": round(tot_additional_kms, 2),
+                            "diesel_litres": round(tot_diesel_litres, 2),
+                            "fuel_expenses": round(tot_fuel_expenses, 2),
+                            "fee_demand": round(tot_fee_demand, 2),
+                            "fee_collected": round(tot_fee_collected, 2),
+                            "fee_unpaid": round(tot_fee_unpaid, 2),
+                            "approved_budget": round(tot_approved_budget, 2),
+                            "cumulative_budget_spent": round(tot_cumulative_budget_spent, 2),
+                            "balance": round(tot_approved_budget - tot_cumulative_budget_spent, 2),
+                            "service_tickets_raised": tot_tickets_raised,
+                            "service_tickets_closed": tot_tickets_closed,
+                            "service_tickets_open": tot_tickets_open,
+                            "incidents_count": tot_incidents,
+                            "statutory_compliance": 1
+                        }
+                    elif p_str in transport_census_by_branch.get("Common", {}):
+                        transport_census_data[p_str] = transport_census_by_branch["Common"][p_str]
         except Exception as te:
             print(f"[Transport Census Query Notice] {te}")
 
@@ -719,7 +836,11 @@ def get_matrix(module: str = "food"):
             "grand_total": grand_total_data,
             "census": census_data,
             "hostel_census": hostel_census_data,
-            "transport_census": transport_census_data
+            "transport_census": transport_census_data,
+            "transport_census_by_branch": transport_census_by_branch if module == "transport" else None,
+            "matrix_by_branch": matrix_by_branch if module == "transport" else None,
+            "branches": ["all", "RPS", "KPM", "Common", "University"] if module == "transport" else None,
+            "active_branch": branch or "all"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1685,8 +1806,9 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         remarks
     ))
 
-def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any]):
-    cur.execute("SELECT * FROM transport_census_entries WHERE period_id = %s;", (period_id,))
+def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any], branch: str = "Common"):
+    b_val = branch or "Common"
+    cur.execute("SELECT * FROM transport_census_entries WHERE period_id = %s AND branch = %s;", (period_id, b_val))
     existing_row = cur.fetchone()
     existing = {}
     if existing_row:
@@ -1767,7 +1889,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any])
 
     tc_sql = """
     INSERT INTO transport_census_entries (
-        period_id, vehicles_count, passengers_count, students_count, staff_count,
+        period_id, branch, vehicles_count, passengers_count, students_count, staff_count,
         approved_kms, actual_kms, additional_kms, excess_kms_rps, excess_km_billed_rps,
         fuel_expenses, diesel_litres, fc_cost, statutory_cost,
         repair_maintenance_cost, employee_cost, other_cost, total_expenses,
@@ -1780,7 +1902,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any])
         per_student_cost_expenses, per_student_fee_year, demand_per_km_day, km_per_veh_day,
         fuel_cost_per_km, diesel_per_100km, remarks
     ) VALUES (
-        %s, %s, %s, %s, %s,
+        %s, %s, %s, %s, %s, %s,
         %s, %s, %s, %s, %s,
         %s, %s, %s, %s,
         %s, %s, %s, %s,
@@ -1793,7 +1915,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any])
         %s, %s, %s, %s,
         %s, %s, %s
     )
-    ON CONFLICT (period_id) DO UPDATE SET
+    ON CONFLICT (period_id, branch) DO UPDATE SET
         vehicles_count = EXCLUDED.vehicles_count,
         passengers_count = EXCLUDED.passengers_count,
         students_count = EXCLUDED.students_count,
@@ -1841,7 +1963,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any])
         remarks = EXCLUDED.remarks;
     """
     cur.execute(tc_sql, (
-        period_id, vehicles_count, passengers_count, students_count, staff_count,
+        period_id, b_val, vehicles_count, passengers_count, students_count, staff_count,
         approved_kms, actual_kms, additional_kms, excess_kms_rps, excess_km_billed_rps,
         fuel_expenses, diesel_litres, fc_cost, statutory_cost,
         repair_maintenance_cost, employee_cost, other_cost, total_expenses,
@@ -1869,18 +1991,19 @@ def batch_save_workstation_data(req: BatchSaveRequest):
                     cur.execute("UPDATE billing_periods SET operating_days = %s WHERE id = %s", (req.operating_days, req.period_id))
                 
                 mod = req.module or "food"
+                branch = req.branch or "Common"
                 for item in req.entries:
                     upsert_sql = """
-                    INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, vendor_id, amount, remarks, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (module, period_id, cost_head_id)
+                    INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, vendor_id, amount, remarks, branch, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (module, period_id, cost_head_id, branch)
                     DO UPDATE SET
                         amount = EXCLUDED.amount,
                         vendor_id = EXCLUDED.vendor_id,
                         remarks = EXCLUDED.remarks,
                         updated_at = CURRENT_TIMESTAMP;
                     """
-                    cur.execute(upsert_sql, (mod, req.period_id, item.cost_head_id, item.vendor_id, item.amount, item.remarks))
+                    cur.execute(upsert_sql, (mod, req.period_id, item.cost_head_id, item.vendor_id, item.amount, item.remarks, branch))
 
                 # Update dining census ONLY for food module
                 if mod == "food" and any(v is not None for v in [req.active_students, req.active_staff, req.others_count, req.total_persons, req.production_meals]):
@@ -1909,7 +2032,7 @@ def batch_save_workstation_data(req: BatchSaveRequest):
 
                 # Update Transport Census & Fleet Metrics
                 if req.transport_census:
-                    compute_and_upsert_transport_census(cur, req.period_id, req.transport_census)
+                    compute_and_upsert_transport_census(cur, req.period_id, req.transport_census, branch=branch)
 
                 # Update any edited Cost Head descriptions / names
                 if req.updated_cost_heads:
@@ -1947,6 +2070,7 @@ def spreadsheet_save_all(req: SpreadsheetSaveRequest):
         try:
             with conn.cursor() as cur:
                 mod = req.module or "food"
+                branch = req.branch or "Common"
 
                 # 1. Update edited Cost Head names/descriptions
                 if req.updated_cost_heads:
@@ -1990,15 +2114,16 @@ def spreadsheet_save_all(req: SpreadsheetSaveRequest):
                                 if ch_id is not None:
                                     amt = float(it.get("amount") or 0.0)
                                     remarks = str(it.get("remarks") or "")
+                                    item_branch = it.get("branch") or branch
                                     cur.execute("""
-                                        INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, amount, remarks, updated_at)
-                                        VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                                        ON CONFLICT (module, period_id, cost_head_id)
+                                        INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, amount, remarks, branch, updated_at)
+                                        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                                        ON CONFLICT (module, period_id, cost_head_id, branch)
                                         DO UPDATE SET
                                             amount = EXCLUDED.amount,
                                             remarks = EXCLUDED.remarks,
                                             updated_at = CURRENT_TIMESTAMP;
-                                    """, (mod, p_id, ch_id, amt, remarks))
+                                    """, (mod, p_id, ch_id, amt, remarks, item_branch))
                         except (ValueError, TypeError):
                             continue
 
@@ -2042,7 +2167,8 @@ def spreadsheet_save_all(req: SpreadsheetSaveRequest):
                         try:
                             p_id = int(p_id_str)
                             if tc_data:
-                                compute_and_upsert_transport_census(cur, p_id, tc_data)
+                                tc_branch = tc_data.get("branch") or branch
+                                compute_and_upsert_transport_census(cur, p_id, tc_data, branch=tc_branch)
                         except Exception as t_err:
                             print(f"[Transport Census Save Notice] period {p_id_str}: {t_err}")
 
@@ -2138,6 +2264,21 @@ def save_hostel_census_bulk(req: Dict[str, Any]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/transport/branches")
+def get_transport_branches():
+    """
+    Returns available operating transport branches / fleets.
+    """
+    return {
+        "branches": [
+            {"id": "all", "code": "all", "label": "All Branches (Consolidated)", "description": "Consolidated fleet metrics across all institutions", "icon": "🏢"},
+            {"id": "RPS", "code": "RPS", "label": "RPS Branch", "description": "Rathinam Public School Fleet", "icon": "🏫"},
+            {"id": "KPM", "code": "KPM", "label": "KPM Branch", "description": "KPM Matriculation Fleet", "icon": "🏫"},
+            {"id": "Common", "code": "Common", "label": "Common Pool", "description": "Central Campus Shared Fleet", "icon": "🚌"},
+            {"id": "University", "code": "University", "label": "University Fleet", "description": "Rathinam University Main Fleet", "icon": "🎓"},
+        ]
+    }
+
 @app.post("/api/transport-census/{period_id}")
 def save_transport_census_direct(period_id: int, req: Dict[str, Any]):
     """
@@ -2147,11 +2288,12 @@ def save_transport_census_direct(period_id: int, req: Dict[str, Any]):
         conn = db.get_db_connection()
         try:
             with conn.cursor() as cur:
-                compute_and_upsert_transport_census(cur, period_id, req)
+                branch = req.get("branch") or "Common"
+                compute_and_upsert_transport_census(cur, period_id, req, branch=branch)
                 conn.commit()
                 row = db.execute_query(
-                    "SELECT * FROM transport_census_entries WHERE period_id = %s;",
-                    (period_id,),
+                    "SELECT * FROM transport_census_entries WHERE period_id = %s AND branch = %s;",
+                    (period_id, branch),
                     fetch_all=False
                 )
                 clean_row = {}
@@ -2162,8 +2304,9 @@ def save_transport_census_direct(period_id: int, req: Dict[str, Any]):
                     }
                 return {
                     "status": "success",
-                    "message": f"Transport fleet parameters & formulas saved successfully for period {period_id}",
+                    "message": f"Transport fleet parameters & formulas saved successfully for period {period_id} ({branch})",
                     "period_id": period_id,
+                    "branch": branch,
                     "data": clean_row
                 }
         except Exception:
@@ -2186,20 +2329,25 @@ def save_transport_census_bulk(req: Dict[str, Any]):
         conn = db.get_db_connection()
         try:
             with conn.cursor() as cur:
+                branch = req.get("branch") or "Common"
                 months_data = req.get("months") or req
                 updated_periods = []
                 for p_id_str, data in months_data.items():
+                    if p_id_str == "branch":
+                        continue
                     try:
                         p_id = int(p_id_str)
                         if isinstance(data, dict):
-                            compute_and_upsert_transport_census(cur, p_id, data)
+                            m_branch = data.get("branch") or branch
+                            compute_and_upsert_transport_census(cur, p_id, data, branch=m_branch)
                             updated_periods.append(p_id)
                     except (ValueError, TypeError):
                         continue
                 conn.commit()
                 return {
                     "status": "success",
-                    "message": f"Saved {len(updated_periods)} transport fleet month(s) successfully",
+                    "message": f"Saved {len(updated_periods)} transport fleet month(s) successfully for branch {branch}",
+                    "branch": branch,
                     "updated_periods": updated_periods
                 }
         except Exception:
@@ -2217,11 +2365,11 @@ def save_transport_census_bulk(req: Dict[str, Any]):
 def clone_period_data(req: ClonePeriodRequest):
     try:
         clone_sql = """
-        INSERT INTO monthly_expense_entries (period_id, cost_head_id, vendor_id, amount, remarks, status)
-        SELECT %s, cost_head_id, vendor_id, amount, 'Cloned from baseline', 'draft'
+        INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, vendor_id, amount, remarks, status, branch)
+        SELECT COALESCE(module, 'food'), %s, cost_head_id, vendor_id, amount, 'Cloned from baseline', 'draft', COALESCE(branch, 'Common')
         FROM monthly_expense_entries
         WHERE period_id = %s
-        ON CONFLICT (period_id, cost_head_id)
+        ON CONFLICT (module, period_id, cost_head_id, branch)
         DO UPDATE SET
             amount = EXCLUDED.amount,
             vendor_id = EXCLUDED.vendor_id,

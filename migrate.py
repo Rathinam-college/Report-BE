@@ -136,7 +136,6 @@ MIGRATION_STEPS = [
         WHERE m.period_id = bp.id AND (m.module IS NULL OR m.module = 'food');
         ALTER TABLE monthly_expense_entries DROP CONSTRAINT IF EXISTS uq_period_cost_head;
         ALTER TABLE monthly_expense_entries DROP CONSTRAINT IF EXISTS uq_module_period_cost_head;
-        ALTER TABLE monthly_expense_entries ADD CONSTRAINT uq_module_period_cost_head UNIQUE (module, period_id, cost_head_id);
         CREATE INDEX IF NOT EXISTS idx_monthly_expense_entries_mod_period ON monthly_expense_entries (module, period_id);
         
         -- Segregated Entry Views per Module
@@ -352,6 +351,22 @@ MIGRATION_STEPS = [
         ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS formula_version INT NOT NULL DEFAULT 1;
         ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
         CREATE INDEX IF NOT EXISTS idx_expense_categories_type ON expense_categories(category_type);
+        """
+    ),
+    (
+        "Transport Branches Multi-Unit Architecture (RPS, KPM, Common, University)",
+        """
+        ALTER TABLE monthly_expense_entries ADD COLUMN IF NOT EXISTS branch VARCHAR(50) NOT NULL DEFAULT 'Common';
+        ALTER TABLE monthly_expense_entries DROP CONSTRAINT IF EXISTS uq_module_period_cost_head;
+        ALTER TABLE monthly_expense_entries DROP CONSTRAINT IF EXISTS uq_module_period_cost_head_branch;
+        ALTER TABLE monthly_expense_entries ADD CONSTRAINT uq_module_period_cost_head_branch UNIQUE (module, period_id, cost_head_id, branch);
+        CREATE INDEX IF NOT EXISTS idx_monthly_expense_entries_branch ON monthly_expense_entries(branch);
+
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS branch VARCHAR(50) NOT NULL DEFAULT 'Common';
+        ALTER TABLE transport_census_entries DROP CONSTRAINT IF EXISTS transport_census_entries_period_id_key;
+        ALTER TABLE transport_census_entries DROP CONSTRAINT IF EXISTS uq_transport_census_period_branch;
+        ALTER TABLE transport_census_entries ADD CONSTRAINT uq_transport_census_period_branch UNIQUE (period_id, branch);
+        CREATE INDEX IF NOT EXISTS idx_transport_census_entries_branch ON transport_census_entries(branch);
         """
     )
 ]

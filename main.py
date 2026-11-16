@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
 from decimal import Decimal
 import re
@@ -172,21 +172,25 @@ class PeriodUpdate(BaseModel):
 
 # Master Data Models
 class CostHeadCreate(BaseModel):
-    category_id: int
+    category_id: Optional[Union[int, str]] = None
     name: str
     code: Optional[str] = None
     cost_behavior: Optional[str] = "variable"
     default_vendor_id: Optional[int] = None
+    default_vendor: Optional[str] = None
     display_order: Optional[int] = None
+    module: Optional[str] = "food"
 
 class CostHeadUpdate(BaseModel):
-    category_id: Optional[int] = None
-    name: str
+    category_id: Optional[Union[int, str]] = None
+    name: Optional[str] = None
     code: Optional[str] = None
     cost_behavior: Optional[str] = "variable"
     default_vendor_id: Optional[int] = None
+    default_vendor: Optional[str] = None
     display_order: Optional[int] = None
     is_active: Optional[bool] = True
+    module: Optional[str] = None
 
 class ReorderCostHeadsRequest(BaseModel):
     cost_head_ids: List[int]
@@ -1037,18 +1041,65 @@ def get_all_cost_heads(module: Optional[str] = None, include_inactive: bool = Fa
 @app.post("/api/master/cost-heads")
 def create_cost_head(req: CostHeadCreate):
     try:
+        name = (req.name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Cost head name cannot be empty")
+
+        # Resolve category_id safely
+        cat_id = None
+        if req.category_id is not None:
+            try:
+                parsed_id = int(req.category_id)
+                if parsed_id > 0:
+                    cat_id = parsed_id
+            except (ValueError, TypeError):
+                cat_id = None
+
+        if not cat_id:
+            mod = (req.module or "food").lower()
+            first_cat = db.execute_query(
+                "SELECT id FROM expense_categories WHERE LOWER(module) = %s AND is_active = true ORDER BY display_order ASC, id ASC LIMIT 1",
+                (mod,),
+                fetch_all=False
+            )
+            if not first_cat:
+                first_cat = db.execute_query(
+                    "SELECT id FROM expense_categories WHERE is_active = true ORDER BY display_order ASC, id ASC LIMIT 1",
+                    fetch_all=False
+                )
+            if first_cat:
+                cat_id = first_cat["id"]
+            else:
+                def_cat = db.execute_query(
+                    "INSERT INTO expense_categories (name, code, module, display_order, is_active) VALUES (%s, %s, %s, 1, true) RETURNING id",
+                    ("General Operational Expenses", f"CAT_{mod.upper()}_GEN", mod),
+                    fetch_all=False
+                )
+                cat_id = def_cat["id"]
+
         code = req.code
         if not code or not code.strip():
-            clean = re.sub(r'[^a-zA-Z0-9]+', '_', req.name).strip('_').upper()
+            clean = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').upper()
             code = f"CH_{clean[:20]}"
-        
+        else:
+            code = code.strip().upper()
+
+        # Ensure unique code in cost_heads to avoid duplicate key violations
+        existing = db.execute_query("SELECT id FROM cost_heads WHERE code = %s", (code,), fetch_all=False)
+        counter = 1
+        base_code = code
+        while existing:
+            code = f"{base_code[:16]}_{counter}"
+            existing = db.execute_query("SELECT id FROM cost_heads WHERE code = %s", (code,), fetch_all=False)
+            counter += 1
+
         behavior = req.cost_behavior or "variable"
 
         display_order = req.display_order
         if display_order is None:
             max_row = db.execute_query(
                 "SELECT COALESCE(MAX(display_order), 0) + 1 AS next_order FROM cost_heads WHERE category_id = %s",
-                (req.category_id,),
+                (cat_id,),
                 fetch_all=False
             )
             display_order = max_row["next_order"] if max_row else 10
@@ -1060,21 +1111,34 @@ def create_cost_head(req: CostHeadCreate):
         """
         new_row = db.execute_query(
             insert_sql,
-            (req.category_id, req.name.strip(), code, behavior, req.default_vendor_id, display_order),
+            (cat_id, name, code, behavior, req.default_vendor_id, display_order),
             fetch_all=False
         )
-        return {"status": "success", "message": f"Cost head '{req.name}' created successfully", "cost_head": new_row}
+        return {"status": "success", "message": f"Cost head '{name}' created successfully", "cost_head": new_row}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/master/cost-heads/{cost_head_id}")
 def update_cost_head(cost_head_id: int, req: CostHeadUpdate):
     try:
-        existing = db.execute_query("SELECT id, category_id, code, cost_behavior, default_vendor_id FROM cost_heads WHERE id = %s", (cost_head_id,), fetch_all=False)
+        existing = db.execute_query("SELECT id, category_id, code, cost_behavior, default_vendor_id, name FROM cost_heads WHERE id = %s", (cost_head_id,), fetch_all=False)
         if not existing:
             raise HTTPException(status_code=404, detail="Cost head not found")
 
-        cat_id = req.category_id if req.category_id is not None else existing["category_id"]
+        cat_id = None
+        if req.category_id is not None:
+            try:
+                parsed_id = int(req.category_id)
+                if parsed_id > 0:
+                    cat_id = parsed_id
+            except (ValueError, TypeError):
+                cat_id = existing["category_id"]
+        else:
+            cat_id = existing["category_id"]
+
+        name = (req.name or existing.get("name") or "").strip()
         code = req.code or existing["code"]
         behavior = req.cost_behavior or existing["cost_behavior"] or "variable"
         vendor_id = req.default_vendor_id if req.default_vendor_id is not None else existing["default_vendor_id"]
@@ -1094,9 +1158,11 @@ def update_cost_head(cost_head_id: int, req: CostHeadUpdate):
         """
         db.execute_commit(
             update_sql,
-            (cat_id, req.name.strip(), code, behavior, vendor_id, req.display_order, is_active, cost_head_id)
+            (cat_id, name, code, behavior, vendor_id, req.display_order, is_active, cost_head_id)
         )
         return {"status": "success", "message": "Cost head updated successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

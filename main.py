@@ -569,10 +569,10 @@ def get_overview(module: str = "food"):
                 COALESCE(SUM(
                     CASE 
                         WHEN %s = 'food' AND (
-                            LOWER(ec.name) LIKE '%total person%' 
-                            OR LOWER(ec.name) LIKE '%cost per person%' 
-                            OR LOWER(ec.name) LIKE '%per person%'
-                            OR LOWER(ec.name) LIKE '%diners%' 
+                            LOWER(ec.name) LIKE '%%total person%%' 
+                            OR LOWER(ec.name) LIKE '%%cost per person%%' 
+                            OR LOWER(ec.name) LIKE '%%per person%%'
+                            OR LOWER(ec.name) LIKE '%%diners%%' 
                         )
                         THEN 0 
                         ELSE e.amount 

@@ -973,7 +973,7 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
 
                     if has_data:
                         transport_census_data[p_str] = {
-                            "vehicles_count": " / ".join(c_veh_list) if c_veh_list else "64 fleet",
+                            "vehicles_count": " / ".join(c_veh_list) if c_veh_list else "0 fleet",
                             "passengers_count": tot_passengers,
                             "students_count": tot_students,
                             "staff_count": tot_staff,
@@ -2436,19 +2436,19 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
             return existing[key]
         return fallback
 
-    vehicles_count = str(get_f("vehicles_count", "18+1"))
-    passengers_count = int(_clean_num(get_f("passengers_count", 447)))
-    students_count = int(_clean_num(get_f("students_count", get_f("students_count_income", get_f("students_count_fee", 412)))))
-    staff_count = int(_clean_num(get_f("staff_count", get_f("staff_count_income", 35))))
+    vehicles_count = str(get_f("vehicles_count", "0"))
+    passengers_count = int(_clean_num(get_f("passengers_count", 0)))
+    students_count = int(_clean_num(get_f("students_count", get_f("students_count_income", get_f("students_count_fee", 0)))))
+    staff_count = int(_clean_num(get_f("staff_count", get_f("staff_count_income", 0))))
 
-    approved_kms = float(_clean_num(get_f("approved_kms", 26691.0)))
-    actual_kms = float(_clean_num(get_f("actual_kms", 25777.0)))
-    additional_kms = float(_clean_num(get_f("additional_kms", 2481.0)))
-    excess_kms_rps = float(_clean_num(get_f("excess_minus_kms_rps", get_f("excess_kms_rps", 0.0))))
+    approved_kms = float(_clean_num(get_f("approved_kms", 0.0)))
+    actual_kms = float(_clean_num(get_f("actual_kms", 0.0)))
+    additional_kms = float(_clean_num(get_f("additional_kms", 0.0)))
+    excess_kms_rps = float(_clean_num(get_f("excess_minus_kms_rps", get_f("excess_kms_rps", actual_kms - approved_kms))))
     excess_km_billed_rps = float(_clean_num(get_f("excess_kms_billed_rps", get_f("excess_km_billed_rps", 0.0))))
 
-    fuel_expenses = float(_clean_num(get_f("fuel_expenses", 487375.0)))
-    diesel_litres = float(_clean_num(get_f("diesel_litres", 5184.84)))
+    fuel_expenses = float(_clean_num(get_f("fuel_expenses", 0.0)))
+    diesel_litres = float(_clean_num(get_f("diesel_litres", 0.0)))
     fc_cost = float(_clean_num(get_f("fc_cost", 0.0)))
     statutory_cost = float(_clean_num(get_f("statutory_cost", 0.0)))
     repair_maintenance_cost = float(_clean_num(get_f("repair_maintenance_cost", 0.0)))
@@ -2472,14 +2472,14 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
     cumulative_income = (fee_collected + rps_monthly_billing + staff_travel_deduction + 
                          additional_kms_billed_rps + additional_kms_others_billing + cab_billing)
 
-    approved_budget = float(_clean_num(get_f("approved_budget", 13730137.73)))
+    approved_budget = float(_clean_num(get_f("approved_budget", 0.0)))
     cumulative_budget_spent = float(_clean_num(get_f("cumulative_budget_spent", 0.0)))
     if cumulative_budget_spent == 0.0 and total_expenses > 0.0:
         cumulative_budget_spent = total_expenses
     balance = approved_budget - cumulative_budget_spent
 
-    service_tickets_raised = int(_clean_num(get_f("service_tickets_raised", 38)))
-    service_tickets_closed = int(_clean_num(get_f("service_tickets_closed", 38)))
+    service_tickets_raised = int(_clean_num(get_f("service_tickets_raised", 0)))
+    service_tickets_closed = int(_clean_num(get_f("service_tickets_closed", 0)))
     service_tickets_open = max(0, service_tickets_raised - service_tickets_closed)
 
     quality_issues_received = int(_clean_num(get_f("quality_issues_received", 0)))
@@ -2487,12 +2487,12 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
     quality_issues_open = max(0, quality_issues_received - quality_issues_closed)
 
     statutory_compliance = int(_clean_num(get_f("statutory_compliance", 1)))
-    incidents_count = int(_clean_num(get_f("incidents_count", 1)))
+    incidents_count = int(_clean_num(get_f("incidents_count", 0)))
 
     per_student_cost_expenses = round(total_expenses / passengers_count, 2) if passengers_count > 0 else 0.0
     per_student_fee_year = round(fee_demand / students_count, 2) if students_count > 0 else 0.0
     demand_per_km_day = round(fee_demand / (actual_kms * 30), 2) if actual_kms > 0 else 0.0
-    km_per_veh_day = round(actual_kms / (19.0 * 30.0), 2)
+    km_per_veh_day = round(actual_kms / (19.0 * 30.0), 2) if actual_kms > 0 else 0.0
     fuel_cost_per_km = round(fuel_expenses / actual_kms, 2) if actual_kms > 0 else 0.0
     diesel_per_100km = round((diesel_litres / actual_kms) * 100.0, 2) if actual_kms > 0 else 0.0
 
@@ -2667,7 +2667,8 @@ def batch_save_workstation_data(req: BatchSaveRequest):
 
                 # Update Transport Census & Fleet Metrics
                 if req.transport_census:
-                    compute_and_upsert_transport_census(cur, req.period_id, req.transport_census, branch=branch)
+                    tc_branch = req.transport_census.get("branch") if isinstance(req.transport_census, dict) else branch
+                    compute_and_upsert_transport_census(cur, req.period_id, req.transport_census, branch=tc_branch or branch)
 
                 # Update any edited Cost Head descriptions / names
                 if req.updated_cost_heads:

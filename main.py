@@ -870,39 +870,8 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
             "avg": round(overall_grand_total / num_periods, 2)
         }
 
-        # Query Dining Census / Headcounts (Students count, Staff count, Others, Total Persons, Production count)
-        census_rows = []
-        try:
-            census_rows = db.execute_query("""
-                SELECT period_id, active_students, active_staff, others_count, total_persons, production_meals
-                FROM dining_census_entries
-            """)
-        except Exception as e:
-            try:
-                db.auto_migrate()
-                census_rows = db.execute_query("""
-                    SELECT period_id, active_students, active_staff, others_count, total_persons, production_meals
-                    FROM dining_census_entries
-                """)
-            except Exception as inner_e:
-                print(f"[Census Query Notice] {inner_e}")
-                census_rows = []
-
-        census_by_period = {r["period_id"]: r for r in census_rows}
-
-        census_data = {
-            "students": {str(p["id"]): (census_by_period.get(p["id"], {}).get("active_students") or 0) for p in periods},
-            "staff": {str(p["id"]): (census_by_period.get(p["id"], {}).get("active_staff") or 0) for p in periods},
-            "others": {str(p["id"]): (census_by_period.get(p["id"], {}).get("others_count") or 0) for p in periods},
-            "total_persons": {str(p["id"]): (
-                census_by_period.get(p["id"], {}).get("total_persons") or (
-                    (census_by_period.get(p["id"], {}).get("active_students") or 0) +
-                    (census_by_period.get(p["id"], {}).get("active_staff") or 0) +
-                    (census_by_period.get(p["id"], {}).get("others_count") or 0)
-                )
-            ) for p in periods},
-            "production": {str(p["id"]): (census_by_period.get(p["id"], {}).get("production_meals") or 0) for p in periods}
-        }
+        # Dining Census / Headcounts removed for Food module
+        census_data = {}
 
         # Query Hostel Census / Operational Metrics (when module == 'hostel')
         hostel_census_data = {}
@@ -2669,27 +2638,6 @@ def batch_save_workstation_data(req: BatchSaveRequest):
                     """
                     cur.execute(upsert_sql, (mod, req.period_id, item.cost_head_id, item.vendor_id, item.amount, item.remarks, branch))
 
-                # Update dining census ONLY for food module
-                if mod == "food" and any(v is not None for v in [req.active_students, req.active_staff, req.others_count, req.total_persons, req.production_meals]):
-                    students = req.active_students if req.active_students is not None else 0
-                    staff = req.active_staff if req.active_staff is not None else 0
-                    others = req.others_count if req.others_count is not None else 0
-                    total_p = req.total_persons if req.total_persons is not None else (students + staff + others)
-                    prod = req.production_meals if req.production_meals is not None else 0
-
-                    census_sql = """
-                    INSERT INTO dining_census_entries (period_id, active_students, active_staff, others_count, total_persons, production_meals)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (period_id)
-                    DO UPDATE SET
-                        active_students = EXCLUDED.active_students,
-                        active_staff = EXCLUDED.active_staff,
-                        others_count = EXCLUDED.others_count,
-                        total_persons = EXCLUDED.total_persons,
-                        production_meals = EXCLUDED.production_meals;
-                    """
-                    cur.execute(census_sql, (req.period_id, students, staff, others, total_p, prod))
-
                 # Update Hostel Census & Operational Metrics
                 if req.hostel_census:
                     compute_and_upsert_hostel_census(cur, req.period_id, req.hostel_census)
@@ -2796,30 +2744,6 @@ def spreadsheet_save_all(req: SpreadsheetSaveRequest):
                                             remarks = EXCLUDED.remarks,
                                             updated_at = CURRENT_TIMESTAMP;
                                     """, (mod, p_id, ch_id, amt, remarks, item_branch))
-                        except (ValueError, TypeError):
-                            continue
-
-                # 5. Save multi-period census (for food)
-                if req.census_by_period:
-                    for p_id_str, cdata in req.census_by_period.items():
-                        try:
-                            p_id = int(p_id_str)
-                            s = int(cdata.get("students") or 0)
-                            st = int(cdata.get("staff") or 0)
-                            o = int(cdata.get("others") or 0)
-                            tot = s + st + o
-                            prod = int(cdata.get("production") or 0)
-                            cur.execute("""
-                                INSERT INTO dining_census_entries (period_id, active_students, active_staff, others_count, total_persons, production_meals)
-                                VALUES (%s, %s, %s, %s, %s, %s)
-                                ON CONFLICT (period_id)
-                                DO UPDATE SET
-                                    active_students = EXCLUDED.active_students,
-                                    active_staff = EXCLUDED.active_staff,
-                                    others_count = EXCLUDED.others_count,
-                                    total_persons = EXCLUDED.total_persons,
-                                    production_meals = EXCLUDED.production_meals;
-                            """, (p_id, s, st, o, tot, prod))
                         except (ValueError, TypeError):
                             continue
 
@@ -3081,24 +3005,6 @@ def clone_period_data(req: ClonePeriodRequest):
             updated_at = CURRENT_TIMESTAMP;
         """
         db.execute_commit(clone_sql, (req.target_period_id, req.source_period_id))
-
-        try:
-            clone_census_sql = """
-            INSERT INTO dining_census_entries (period_id, active_students, active_staff, others_count, total_persons, production_meals)
-            SELECT %s, active_students, active_staff, others_count, total_persons, production_meals
-            FROM dining_census_entries
-            WHERE period_id = %s
-            ON CONFLICT (period_id)
-            DO UPDATE SET
-                active_students = EXCLUDED.active_students,
-                active_staff = EXCLUDED.active_staff,
-                others_count = EXCLUDED.others_count,
-                total_persons = EXCLUDED.total_persons,
-                production_meals = EXCLUDED.production_meals;
-            """
-            db.execute_commit(clone_census_sql, (req.target_period_id, req.source_period_id))
-        except Exception as ce:
-            print(f"[Clone Census Notice] {ce}")
 
         try:
             clone_hostel_sql = """

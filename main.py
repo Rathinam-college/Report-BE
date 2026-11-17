@@ -576,6 +576,12 @@ def get_overview(module: str = "food"):
                             OR LOWER(ec.name) LIKE '%%cost per person%%' 
                             OR LOWER(ec.name) LIKE '%%per person%%'
                             OR LOWER(ec.name) LIKE '%%diners%%' 
+                            OR LOWER(ec.name) LIKE '%%census%%'
+                            OR LOWER(ch.name) LIKE '%%total person%%' 
+                            OR LOWER(ch.name) LIKE '%%cost per person%%' 
+                            OR LOWER(ch.name) LIKE '%%per person%%'
+                            OR LOWER(ch.name) LIKE '%%diners%%'
+                            OR LOWER(ch.name) LIKE '%%census%%'
                         )
                         THEN 0 
                         ELSE e.amount 
@@ -732,14 +738,15 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
         grand_total_by_period = {p["id"]: 0.0 for p in periods}
         overall_grand_total = 0.0
 
-        def is_excluded_from_grand_total(cat_name: str) -> bool:
+        def is_excluded_from_grand_total(cat_name: str, item_name: str = "") -> bool:
             if (module or "food").lower() != "food":
                 return False
-            n = (cat_name or "").lower().strip()
-            return any(k in n for k in [
+            s = f"{cat_name or ''} {item_name or ''}".lower().strip()
+            return any(k in s for k in [
                 "total person", "cost per person", "per person", 
                 "total persons", "persons count", "diners", 
-                "per meal", "unit economics"
+                "per meal", "cost per meal", "unit economics",
+                "cost / person", "cost/person", "headcount", "student count"
             ])
 
         categories_data = []
@@ -761,6 +768,8 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
             formatted_items = []
             for ch in cat_items:
                 ch_id = ch["id"]
+                ch_name = ch.get("name") or ""
+                is_item_non_expense = is_non_expense or is_excluded_from_grand_total(cat_name, ch_name)
                 amounts_dict = {}
                 remarks_dict = {}
                 row_total = 0.0
@@ -775,12 +784,12 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
                     if val is not None:
                         row_total += val
                         cat_subtotal_by_period[p_id] += val
-                        if not is_non_expense:
+                        if not is_item_non_expense:
                             grand_total_by_period[p_id] += val
 
                 row_avg = round(row_total / num_periods, 2)
                 cat_total += row_total
-                if not is_non_expense:
+                if not is_item_non_expense:
                     overall_grand_total += row_total
 
                 formatted_items.append({

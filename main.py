@@ -1828,7 +1828,7 @@ def get_hostel_parameters():
             ORDER BY display_order ASC, section_order ASC, id ASC;
             """
         )
-        if rows is not None:
+        if rows is not None and len(rows) > 0:
             return rows
     except Exception as query_err:
         print(f"[HostelParameters] Notice on query: {query_err}. Running self-healing sync...")
@@ -2020,7 +2020,7 @@ def get_transport_parameters():
             ORDER BY display_order ASC, section_order ASC, id ASC;
             """
         )
-        if rows is not None:
+        if rows is not None and len(rows) > 0:
             return rows
     except Exception as query_err:
         print(f"[TransportParameters] Notice on query: {query_err}. Running self-healing sync...")

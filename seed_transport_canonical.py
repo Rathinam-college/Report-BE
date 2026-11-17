@@ -138,15 +138,7 @@ def ensure_and_seed_transport_parameters():
                         INSERT INTO transport_master_parameters (
                             s_no, param_key, param_name, section, section_order, display_order, input_type, unit, formula, is_system, is_active
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, TRUE)
-                        ON CONFLICT (param_key) DO UPDATE SET
-                            s_no = EXCLUDED.s_no,
-                            param_name = EXCLUDED.param_name,
-                            section = EXCLUDED.section,
-                            section_order = EXCLUDED.section_order,
-                            display_order = EXCLUDED.display_order,
-                            input_type = EXCLUDED.input_type,
-                            unit = EXCLUDED.unit,
-                            formula = EXCLUDED.formula;
+                        ON CONFLICT (param_key) DO NOTHING;
                     ''', (s_no, key, name, sec, sec_ord, disp_ord, in_type, unit, formula))
                 conn.commit()
         finally:

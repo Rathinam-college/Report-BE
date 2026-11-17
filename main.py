@@ -218,6 +218,9 @@ class ReorderCostHeadsRequest(BaseModel):
 class ReorderCategoriesRequest(BaseModel):
     category_ids: List[int]
 
+class ReorderParametersRequest(BaseModel):
+    parameter_ids: List[int]
+
 class BatchDeleteRequest(BaseModel):
     ids: List[int]
 
@@ -1785,7 +1788,7 @@ def get_hostel_parameters():
                    input_type, unit, formula, display_order, is_system, is_active
             FROM hostel_master_parameters
             WHERE is_active = TRUE
-            ORDER BY section_order ASC, display_order ASC, id ASC;
+            ORDER BY display_order ASC, section_order ASC, id ASC;
             """
         )
         if rows is not None:
@@ -1803,7 +1806,7 @@ def get_hostel_parameters():
                    input_type, unit, formula, display_order, is_system, is_active
             FROM hostel_master_parameters
             WHERE is_active = TRUE
-            ORDER BY section_order ASC, display_order ASC, id ASC;
+            ORDER BY display_order ASC, section_order ASC, id ASC;
             """
         )
         return rows or []
@@ -1977,7 +1980,7 @@ def get_transport_parameters():
                    input_type, unit, formula, display_order, is_system, is_active
             FROM transport_master_parameters
             WHERE is_active = TRUE
-            ORDER BY section_order ASC, display_order ASC, id ASC;
+            ORDER BY display_order ASC, section_order ASC, id ASC;
             """
         )
         if rows is not None:
@@ -1995,7 +1998,7 @@ def get_transport_parameters():
                    input_type, unit, formula, display_order, is_system, is_active
             FROM transport_master_parameters
             WHERE is_active = TRUE
-            ORDER BY section_order ASC, display_order ASC, id ASC;
+            ORDER BY display_order ASC, section_order ASC, id ASC;
             """
         )
         return rows or []
@@ -2148,6 +2151,46 @@ def delete_transport_parameter(param_id: int):
         return {"status": "success", "message": f"Transport parameter '{param.get('param_name')}' removed successfully"}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/transport/parameters/reorder")
+def reorder_transport_parameters(req: ReorderParametersRequest):
+    """
+    Updates the display order of transport parameters following a drag-and-drop or move step event.
+    """
+    try:
+        if not req.parameter_ids:
+            return {"status": "success", "message": "No parameters provided"}
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                for order, pid in enumerate(req.parameter_ids, start=1):
+                    cur.execute("UPDATE transport_master_parameters SET display_order = %s WHERE id = %s;", (order, pid))
+                conn.commit()
+                return {"status": "success", "message": "Transport parameters reordered successfully in database"}
+        finally:
+            db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/hostel/parameters/reorder")
+def reorder_hostel_parameters(req: ReorderParametersRequest):
+    """
+    Updates the display order of hostel parameters following a drag-and-drop or move step event.
+    """
+    try:
+        if not req.parameter_ids:
+            return {"status": "success", "message": "No parameters provided"}
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                for order, pid in enumerate(req.parameter_ids, start=1):
+                    cur.execute("UPDATE hostel_master_parameters SET display_order = %s WHERE id = %s;", (order, pid))
+                conn.commit()
+                return {"status": "success", "message": "Hostel parameters reordered successfully in database"}
+        finally:
+            db.release_db_connection(conn)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

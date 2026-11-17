@@ -2667,8 +2667,15 @@ def batch_save_workstation_data(req: BatchSaveRequest):
 
                 # Update Transport Census & Fleet Metrics
                 if req.transport_census:
-                    tc_branch = req.transport_census.get("branch") if isinstance(req.transport_census, dict) else branch
-                    compute_and_upsert_transport_census(cur, req.period_id, req.transport_census, branch=tc_branch or branch)
+                    is_multi_branch = isinstance(req.transport_census, dict) and any(b in req.transport_census for b in ["Common", "RPS", "KPM", "University"])
+                    if is_multi_branch:
+                        for b_name in ["Common", "RPS", "KPM", "University"]:
+                            b_data = req.transport_census.get(b_name)
+                            if isinstance(b_data, dict) and b_data:
+                                compute_and_upsert_transport_census(cur, req.period_id, b_data, branch=b_name)
+                    else:
+                        tc_branch = req.transport_census.get("branch") if isinstance(req.transport_census, dict) else branch
+                        compute_and_upsert_transport_census(cur, req.period_id, req.transport_census, branch=tc_branch or branch)
 
                 # Update any edited Cost Head descriptions / names
                 if req.updated_cost_heads:

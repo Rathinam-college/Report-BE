@@ -437,6 +437,13 @@ def run_migrations():
     except Exception as te:
         print(f"  [WARNING] Transport Master Parameters Seeding skipped: {te}")
 
+    try:
+        import seed_hostel_canonical
+        seed_hostel_canonical.ensure_and_seed_hostel_parameters()
+        print("  [OK] Hostel Master Parameters Seeded & Verified")
+    except Exception as he:
+        print(f"  [WARNING] Hostel Master Parameters Seeding skipped: {he}")
+
     # Notice: Do not automatically re-seed operational/census data on startup.
     # Operational data must only be populated when user enters and saves via Data Entry.
     # To manually reseed demo data, use the explicit POST /api/system/seed-default endpoint.

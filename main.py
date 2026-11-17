@@ -1772,8 +1772,27 @@ def delete_category_formula(formula_id: int):
 def get_hostel_parameters():
     """
     Returns the list of active hostel master parameters grouped into sections.
+    Self-heals and seeds parameters if table is missing or unpopulated in production.
     """
     try:
+        rows = db.execute_query(
+            """
+            SELECT id, s_no, param_key, param_name, section, section_order,
+                   input_type, unit, formula, display_order, is_system, is_active
+            FROM hostel_master_parameters
+            WHERE is_active = TRUE
+            ORDER BY section_order ASC, display_order ASC, id ASC;
+            """
+        )
+        if rows and len(rows) > 0:
+            return rows
+    except Exception as query_err:
+        print(f"[HostelParameters] Notice on query: {query_err}. Running self-healing sync...")
+
+    # Auto-heal: Ensure table exists and canonical parameters are seeded
+    try:
+        import seed_hostel_canonical
+        seed_hostel_canonical.ensure_and_seed_hostel_parameters()
         rows = db.execute_query(
             """
             SELECT id, s_no, param_key, param_name, section, section_order,

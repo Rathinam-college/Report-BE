@@ -573,16 +573,17 @@ def get_overview(module: str = "food"):
                     CASE 
                         WHEN ch.is_active = FALSE OR ec.is_active = FALSE THEN 0
                         WHEN %s = 'food' AND (
-                            LOWER(ec.name) LIKE '%%total person%%' 
-                            OR LOWER(ec.name) LIKE '%%cost per person%%' 
-                            OR LOWER(ec.name) LIKE '%%per person%%'
+                            LOWER(TRIM(ec.name)) IN ('person', 'persons', 'total person', 'total persons')
+                            OR LOWER(ec.name) LIKE '%%person%%' 
                             OR LOWER(ec.name) LIKE '%%diners%%' 
                             OR LOWER(ec.name) LIKE '%%census%%'
-                            OR LOWER(ch.name) LIKE '%%total person%%' 
-                            OR LOWER(ch.name) LIKE '%%cost per person%%' 
-                            OR LOWER(ch.name) LIKE '%%per person%%'
+                            OR LOWER(ec.name) LIKE '%%unit economics%%'
+                            OR LOWER(ch.name) LIKE '%%person%%' 
+                            OR LOWER(ch.name) LIKE '%%student%%' 
+                            OR LOWER(ch.name) LIKE '%%staff count%%'
                             OR LOWER(ch.name) LIKE '%%diners%%'
                             OR LOWER(ch.name) LIKE '%%census%%'
+                            OR (LOWER(TRIM(ec.name)) = 'person' AND LOWER(TRIM(ch.name)) = 'others')
                         )
                         THEN 0 
                         ELSE e.amount 
@@ -742,13 +743,39 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
         def is_excluded_from_grand_total(cat_name: str, item_name: str = "") -> bool:
             if (module or "food").lower() != "food":
                 return False
-            s = f"{cat_name or ''} {item_name or ''}".lower().strip()
-            return any(k in s for k in [
-                "total person", "cost per person", "per person", 
-                "total persons", "persons count", "diners", 
-                "per meal", "cost per meal", "unit economics",
-                "cost / person", "cost/person", "headcount", "student count"
-            ])
+            c = str(cat_name or "").lower().strip()
+            i = str(item_name or "").lower().strip()
+            s = f"{c} {i}".strip()
+            if (
+                c == "person"
+                or c == "persons"
+                or "person" in c
+                or "diners" in c
+                or "census" in c
+                or "unit economics" in c
+                or "economics" in c
+            ):
+                return True
+            return (
+                "student" in i
+                or "staff count" in i
+                or "staffs count" in i
+                or "cost per person" in i
+                or "cost/person" in i
+                or "cost / person" in i
+                or "per person" in i
+                or "per meal" in i
+                or "diners" in i
+                or "census" in i
+                or "headcount" in i
+                or "total person" in s
+                or "total persons" in s
+                or "cost per person" in s
+                or "student count" in s
+                or "students count" in s
+                or "staff count" in s
+                or (c in ("person", "persons") and "other" in i)
+            )
 
         categories_data = []
 

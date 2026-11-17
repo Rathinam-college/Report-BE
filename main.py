@@ -58,6 +58,7 @@ def ensure_schema_compatibility():
         """
         CREATE TABLE IF NOT EXISTS hostel_master_parameters (
             id SERIAL PRIMARY KEY,
+            s_no VARCHAR(20) DEFAULT '',
             param_key VARCHAR(100) UNIQUE NOT NULL,
             param_name VARCHAR(255) NOT NULL,
             section VARCHAR(100) NOT NULL,
@@ -71,6 +72,8 @@ def ensure_schema_compatibility():
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """,
+        "ALTER TABLE hostel_master_parameters ADD COLUMN IF NOT EXISTS s_no VARCHAR(20) DEFAULT '';",
+        "UPDATE hostel_master_parameters SET s_no = CAST(display_order AS VARCHAR) WHERE s_no IS NULL OR s_no = '';",
         """
         CREATE TABLE IF NOT EXISTS transport_master_parameters (
             id SERIAL PRIMARY KEY,
@@ -1773,7 +1776,7 @@ def get_hostel_parameters():
     try:
         rows = db.execute_query(
             """
-            SELECT id, param_key, param_name, section, section_order,
+            SELECT id, s_no, param_key, param_name, section, section_order,
                    input_type, unit, formula, display_order, is_system, is_active
             FROM hostel_master_parameters
             WHERE is_active = TRUE
@@ -1794,12 +1797,15 @@ def create_hostel_parameter(req: Dict[str, Any]):
         if not param_name:
             raise HTTPException(status_code=400, detail="Parameter name is required")
 
+        s_no = str(req.get("s_no") or "").strip()
         section = (req.get("section") or "Custom Parameters").strip()
         section_order = int(req.get("section_order") or 7)
         input_type = (req.get("input_type") or "cost").strip()
         unit = (req.get("unit") or "").strip()
         formula = req.get("formula") or None
         display_order = int(req.get("display_order") or 50)
+        if not s_no:
+            s_no = str(display_order)
 
         # Generate a safe unique param_key
         base_key = re.sub(r'[^a-z0-9_]', '', param_name.lower().replace(' ', '_'))
@@ -1818,12 +1824,12 @@ def create_hostel_parameter(req: Dict[str, Any]):
                 cur.execute(
                     """
                     INSERT INTO hostel_master_parameters (
-                        param_key, param_name, section, section_order,
+                        s_no, param_key, param_name, section, section_order,
                         input_type, unit, formula, display_order, is_system, is_active
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
-                    RETURNING id, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
+                    RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
                     """,
-                    (param_key, param_name, section, section_order, input_type, unit, formula, display_order)
+                    (s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order)
                 )
                 new_row = cur.fetchone()
                 conn.commit()
@@ -1844,11 +1850,14 @@ def create_hostel_parameter(req: Dict[str, Any]):
 @app.put("/api/hostel/parameters/{param_id}")
 def update_hostel_parameter(param_id: int, req: Dict[str, Any]):
     """
-    Updates an existing hostel parameter (name, section, formula, input_type, display_order).
+    Updates an existing hostel parameter (s_no, name, section, formula, input_type, display_order).
     """
     try:
         fields = []
         vals = []
+        if "s_no" in req:
+            fields.append("s_no = %s")
+            vals.append(str(req["s_no"]).strip())
         if "param_name" in req:
             fields.append("param_name = %s")
             vals.append(str(req["param_name"]).strip())
@@ -1878,7 +1887,7 @@ def update_hostel_parameter(param_id: int, req: Dict[str, Any]):
             return {"status": "success", "message": "No changes requested"}
 
         vals.append(param_id)
-        query = f"UPDATE hostel_master_parameters SET {', '.join(fields)} WHERE id = %s RETURNING id, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;"
+        query = f"UPDATE hostel_master_parameters SET {', '.join(fields)} WHERE id = %s RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;"
         row = db.execute_query(query, tuple(vals), fetch_all=False)
         if not row:
             raise HTTPException(status_code=404, detail="Hostel parameter not found")
@@ -1902,8 +1911,12 @@ def delete_hostel_parameter(param_id: int):
         if not param:
             raise HTTPException(status_code=404, detail="Parameter not found")
 
-        db.execute_commit("UPDATE hostel_master_parameters SET is_active = FALSE WHERE id = %s;", (param_id,))
-        return {"status": "success", "message": "Parameter removed successfully"}
+        # Non-system custom parameters can be removed completely
+        if param and not param.get("is_system"):
+            db.execute_commit("DELETE FROM hostel_master_parameters WHERE id = %s;", (param_id,))
+        else:
+            db.execute_commit("UPDATE hostel_master_parameters SET is_active = FALSE WHERE id = %s;", (param_id,))
+        return {"status": "success", "message": "Hostel parameter removed successfully"}
     except HTTPException:
         raise
     except Exception as e:

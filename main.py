@@ -2910,7 +2910,7 @@ def get_transport_branches():
             {"id": "all", "code": "all", "label": "All Branches (Consolidated)", "description": "Consolidated fleet metrics across all institutions", "icon": "🏢"},
             {"id": "RPS", "code": "RPS", "label": "RPS Branch", "description": "Rathinam Public School Fleet", "icon": "🏫"},
             {"id": "KPM", "code": "KPM", "label": "KPM Branch", "description": "KPM Matriculation Fleet", "icon": "🏫"},
-            {"id": "Common", "code": "Common", "label": "Common Pool", "description": "Central Campus Shared Fleet", "icon": "🚌"},
+            {"id": "Common", "code": "Common", "label": "Common", "description": "Central Campus Shared Fleet", "icon": "🚌"},
             {"id": "University", "code": "University", "label": "University Fleet", "description": "Rathinam University Main Fleet", "icon": "🎓"},
         ]
     }

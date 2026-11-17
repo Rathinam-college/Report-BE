@@ -437,12 +437,9 @@ def run_migrations():
     except Exception as te:
         print(f"  [WARNING] Transport Master Parameters Seeding skipped: {te}")
 
-    try:
-        import seed_modules
-        seed_modules.seed_segregated_data()
-        print("  [OK] Segregated Module Data Verified (Food, Hostel, Transport)")
-    except Exception as e:
-        print(f"  [WARNING] Segregated Data Seeding skipped: {e}")
+    # Notice: Do not automatically re-seed operational/census data on startup.
+    # Operational data must only be populated when user enters and saves via Data Entry.
+    # To manually reseed demo data, use the explicit POST /api/system/seed-default endpoint.
 
     return True
 

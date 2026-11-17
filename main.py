@@ -571,6 +571,7 @@ def get_overview(module: str = "food"):
                 p.start_date,
                 COALESCE(SUM(
                     CASE 
+                        WHEN ch.is_active = FALSE OR ec.is_active = FALSE THEN 0
                         WHEN %s = 'food' AND (
                             LOWER(ec.name) LIKE '%%total person%%' 
                             OR LOWER(ec.name) LIKE '%%cost per person%%' 

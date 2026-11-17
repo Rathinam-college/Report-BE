@@ -93,7 +93,6 @@ MIGRATION_STEPS = [
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';
-        UPDATE expense_categories SET is_active = true WHERE is_active IS NOT TRUE;
         """
     ),
     (
@@ -110,7 +109,6 @@ MIGRATION_STEPS = [
             is_active BOOLEAN NOT NULL DEFAULT true,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-        UPDATE cost_heads SET is_active = true WHERE is_active IS NOT TRUE;
         """
     ),
     (
@@ -393,6 +391,17 @@ MIGRATION_STEPS = [
 
         ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS custom_metrics JSONB DEFAULT '{}'::jsonb;
         ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS branch VARCHAR(50) DEFAULT 'Common';
+        """
+    ),
+    (
+        "Deleted Master Parameters Tombstone Registry",
+        """
+        CREATE TABLE IF NOT EXISTS deleted_master_parameters (
+            module VARCHAR(50) NOT NULL,
+            param_key VARCHAR(100) NOT NULL,
+            deleted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (module, param_key)
+        );
         """
     )
 ]

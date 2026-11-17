@@ -92,11 +92,39 @@ def ensure_and_seed_hostel_parameters():
         # 3. Add custom_metrics to hostel_census_entries
         db.execute_commit("ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS custom_metrics JSONB DEFAULT '{}'::jsonb;")
 
-        # 4. Upsert canonical parameters
+        # 4. Upsert canonical parameters (Respecting user deletions permanently)
         conn = db.get_db_connection()
         try:
             with conn.cursor() as cur:
+                # Ensure deleted tombstones table exists
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS deleted_master_parameters (
+                        module VARCHAR(50) NOT NULL,
+                        param_key VARCHAR(100) NOT NULL,
+                        deleted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (module, param_key)
+                    );
+                """)
+
+                # Fetch all keys explicitly deleted by user
+                cur.execute("SELECT param_key FROM deleted_master_parameters WHERE module = 'hostel';")
+                deleted_keys = set(r[0] for r in cur.fetchall())
+
+                # Also sync any currently inactive rows as tombstones so they are never reactivated
+                cur.execute("SELECT param_key FROM hostel_master_parameters WHERE is_active = FALSE;")
+                for r in cur.fetchall():
+                    deleted_keys.add(r[0])
+                    cur.execute("""
+                        INSERT INTO deleted_master_parameters (module, param_key)
+                        VALUES ('hostel', %s)
+                        ON CONFLICT DO NOTHING;
+                    """, (r[0],))
+
                 for s_no, key, name, sec, sec_ord, disp_ord, in_type, unit, formula in CANONICAL_HOSTEL_PARAMETERS:
+                    if key in deleted_keys:
+                        # User explicitly deleted this parameter! Do not insert or reactivate!
+                        continue
+
                     cur.execute('''
                         INSERT INTO hostel_master_parameters (
                             s_no, param_key, param_name, section, section_order, display_order, input_type, unit, formula, is_system, is_active
@@ -109,8 +137,7 @@ def ensure_and_seed_hostel_parameters():
                             display_order = EXCLUDED.display_order,
                             input_type = EXCLUDED.input_type,
                             unit = EXCLUDED.unit,
-                            formula = COALESCE(hostel_master_parameters.formula, EXCLUDED.formula),
-                            is_active = TRUE;
+                            formula = COALESCE(hostel_master_parameters.formula, EXCLUDED.formula);
                     ''', (s_no, key, name, sec, sec_ord, disp_ord, in_type, unit, formula))
                 conn.commit()
         finally:

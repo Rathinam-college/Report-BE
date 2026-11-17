@@ -1255,21 +1255,30 @@ def reorder_cost_heads(req: ReorderCostHeadsRequest):
 @app.delete("/api/master/cost-heads/{cost_head_id}")
 def delete_cost_head(cost_head_id: int):
     try:
+        ch_row = db.execute_query("SELECT code FROM cost_heads WHERE id = %s", (cost_head_id,), fetch_all=False)
+        ch_code = ch_row.get("code") if ch_row else None
+        if ch_code:
+            db.execute_commit("""
+                INSERT INTO deleted_master_parameters (module, param_key)
+                VALUES ('food_cost_head', %s)
+                ON CONFLICT (module, param_key) DO NOTHING;
+            """, (ch_code,))
+
         entry_count = db.execute_query(
             "SELECT COUNT(*) AS cnt FROM monthly_expense_entries WHERE cost_head_id = %s",
             (cost_head_id,),
             fetch_all=False
         )["cnt"]
 
+        # Keep as inactive tombstone so migrations/reinstall will never re-insert or reactivate it
+        db.execute_commit("UPDATE cost_heads SET is_active = false WHERE id = %s", (cost_head_id,))
         if entry_count > 0:
-            db.execute_commit("UPDATE cost_heads SET is_active = false WHERE id = %s", (cost_head_id,))
             return {
                 "status": "deactivated",
                 "message": f"Cost head has {entry_count} historical financial entries; soft-deactivated to preserve ledger audit trail."
             }
         else:
-            db.execute_commit("DELETE FROM cost_heads WHERE id = %s", (cost_head_id,))
-            return {"status": "deleted", "message": "Cost head deleted permanently"}
+            return {"status": "deleted", "message": "Cost head removed successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1285,14 +1294,12 @@ def batch_delete_cost_heads(req: BatchDeleteRequest):
         try:
             with conn.cursor() as cur:
                 for ch_id in req.ids:
-                    cur.execute("SELECT COUNT(*) FROM monthly_expense_entries WHERE cost_head_id = %s", (ch_id,))
-                    cnt = cur.fetchone()[0]
-                    if cnt > 0:
-                        cur.execute("UPDATE cost_heads SET is_active = false WHERE id = %s", (ch_id,))
-                        deactivated += 1
-                    else:
-                        cur.execute("DELETE FROM cost_heads WHERE id = %s", (ch_id,))
-                        deleted += 1
+                    cur.execute("SELECT code FROM cost_heads WHERE id = %s", (ch_id,))
+                    code_row = cur.fetchone()
+                    if code_row and code_row[0]:
+                        cur.execute("INSERT INTO deleted_master_parameters (module, param_key) VALUES ('food_cost_head', %s) ON CONFLICT DO NOTHING;", (code_row[0],))
+                    cur.execute("UPDATE cost_heads SET is_active = false WHERE id = %s", (ch_id,))
+                    deleted += 1
                 conn.commit()
             return {
                 "status": "success",
@@ -1560,21 +1567,21 @@ def delete_category(category_id: int):
                 tuple(ch_ids),
                 fetch_all=False
             )["cnt"]
-            if entry_cnt > 0:
-                # Soft deactivate category and associated cost heads to preserve historical audit trail
-                db.execute_commit("UPDATE expense_categories SET is_active = false WHERE id = %s", (category_id,))
-                db.execute_commit(f"UPDATE cost_heads SET is_active = false WHERE category_id = %s", (category_id,))
-                return {
-                    "status": "deactivated",
-                    "message": f"Category has {entry_cnt} associated expense ledger entries; deactivated to preserve historical audit trail."
-                }
-            else:
-                db.execute_commit(f"DELETE FROM cost_heads WHERE category_id = %s", (category_id,))
-                db.execute_commit("DELETE FROM expense_categories WHERE id = %s", (category_id,))
-                return {"status": "deleted", "message": "Category and unused cost heads permanently deleted."}
-        else:
-            db.execute_commit("DELETE FROM expense_categories WHERE id = %s", (category_id,))
-            return {"status": "deleted", "message": "Category permanently deleted."}
+        cat_code = cat_row.get("code") if cat_row else None
+        if cat_code:
+            db.execute_commit("""
+                INSERT INTO deleted_master_parameters (module, param_key)
+                VALUES ('food', %s)
+                ON CONFLICT (module, param_key) DO NOTHING;
+            """, (cat_code,))
+
+        # Mark as inactive tombstone so migrations/reinstall will never re-insert or reactivate it
+        db.execute_commit("UPDATE expense_categories SET is_active = false WHERE id = %s", (category_id,))
+        db.execute_commit("UPDATE cost_heads SET is_active = false WHERE category_id = %s", (category_id,))
+        return {
+            "status": "deleted",
+            "message": f"Category '{cat_name}' removed successfully."
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -1635,14 +1642,13 @@ def batch_delete_categories(req: BatchDeleteRequest):
                         if cur.fetchone()[0] > 0:
                             has_entries = True
                     
-                    if has_entries:
-                        cur.execute("UPDATE expense_categories SET is_active = false WHERE id = %s", (cat_id,))
-                        cur.execute("UPDATE cost_heads SET is_active = false WHERE category_id = %s", (cat_id,))
-                        deactivated += 1
-                    else:
-                        cur.execute("DELETE FROM cost_heads WHERE category_id = %s", (cat_id,))
-                        cur.execute("DELETE FROM expense_categories WHERE id = %s", (cat_id,))
-                        deleted += 1
+                    cur.execute("SELECT code FROM expense_categories WHERE id = %s", (cat_id,))
+                    code_row = cur.fetchone()
+                    if code_row and code_row[0]:
+                        cur.execute("INSERT INTO deleted_master_parameters (module, param_key) VALUES ('food', %s) ON CONFLICT DO NOTHING;", (code_row[0],))
+                    cur.execute("UPDATE expense_categories SET is_active = false WHERE id = %s", (cat_id,))
+                    cur.execute("UPDATE cost_heads SET is_active = false WHERE category_id = %s", (cat_id,))
+                    deleted += 1
                 conn.commit()
             return {
                 "status": "success",
@@ -1782,7 +1788,7 @@ def get_hostel_parameters():
             ORDER BY section_order ASC, display_order ASC, id ASC;
             """
         )
-        if rows and len(rows) > 0:
+        if rows is not None:
             return rows
     except Exception as query_err:
         print(f"[HostelParameters] Notice on query: {query_err}. Running self-healing sync...")
@@ -1833,21 +1839,34 @@ def create_hostel_parameter(req: Dict[str, Any]):
         conn = db.get_db_connection()
         try:
             with conn.cursor() as cur:
+                # Remove from deleted tombstones if re-adding
+                cur.execute("DELETE FROM deleted_master_parameters WHERE module = 'hostel' AND param_key = %s;", (param_key,))
+
                 # Check collision
                 cur.execute("SELECT id FROM hostel_master_parameters WHERE param_key = %s;", (param_key,))
-                if cur.fetchone():
-                    param_key = f"{base_key}_{int(datetime.now().timestamp())}"
-
-                cur.execute(
-                    """
-                    INSERT INTO hostel_master_parameters (
-                        s_no, param_key, param_name, section, section_order,
-                        input_type, unit, formula, display_order, is_system, is_active
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
-                    RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
-                    """,
-                    (s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order)
-                )
+                existing_row = cur.fetchone()
+                if existing_row:
+                    cur.execute(
+                        """
+                        UPDATE hostel_master_parameters
+                        SET s_no = %s, param_name = %s, section = %s, section_order = %s,
+                            input_type = %s, unit = %s, formula = %s, display_order = %s, is_active = TRUE
+                        WHERE id = %s
+                        RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
+                        """,
+                        (s_no, param_name, section, section_order, input_type, unit, formula, display_order, existing_row[0])
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO hostel_master_parameters (
+                            s_no, param_key, param_name, section, section_order,
+                            input_type, unit, formula, display_order, is_system, is_active
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
+                        RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
+                        """,
+                        (s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order)
+                    )
                 new_row = cur.fetchone()
                 conn.commit()
                 col_names = [d[0] for d in cur.description]
@@ -1921,19 +1940,22 @@ def update_hostel_parameter(param_id: int, req: Dict[str, Any]):
 @app.delete("/api/hostel/parameters/{param_id}")
 def delete_hostel_parameter(param_id: int):
     """
-    Soft-deletes or removes a hostel parameter.
+    Soft-deletes a hostel parameter and records a permanent deletion tombstone.
     """
     try:
-        param = db.execute_query("SELECT id, is_system FROM hostel_master_parameters WHERE id = %s;", (param_id,), fetch_all=False)
+        param = db.execute_query("SELECT id, param_key, param_name, is_system FROM hostel_master_parameters WHERE id = %s;", (param_id,), fetch_all=False)
         if not param:
             raise HTTPException(status_code=404, detail="Parameter not found")
 
-        # Non-system custom parameters can be removed completely
-        if param and not param.get("is_system"):
-            db.execute_commit("DELETE FROM hostel_master_parameters WHERE id = %s;", (param_id,))
-        else:
-            db.execute_commit("UPDATE hostel_master_parameters SET is_active = FALSE WHERE id = %s;", (param_id,))
-        return {"status": "success", "message": "Hostel parameter removed successfully"}
+        pkey = param.get("param_key")
+        db.execute_commit("UPDATE hostel_master_parameters SET is_active = FALSE WHERE id = %s;", (param_id,))
+        if pkey:
+            db.execute_commit("""
+                INSERT INTO deleted_master_parameters (module, param_key)
+                VALUES ('hostel', %s)
+                ON CONFLICT (module, param_key) DO NOTHING;
+            """, (pkey,))
+        return {"status": "success", "message": f"Hostel parameter '{param.get('param_name')}' removed successfully"}
     except HTTPException:
         raise
     except Exception as e:
@@ -1958,7 +1980,7 @@ def get_transport_parameters():
             ORDER BY section_order ASC, display_order ASC, id ASC;
             """
         )
-        if rows and len(rows) > 0:
+        if rows is not None:
             return rows
     except Exception as query_err:
         print(f"[TransportParameters] Notice on query: {query_err}. Running self-healing sync...")
@@ -2008,20 +2030,33 @@ def create_transport_parameter(req: Dict[str, Any]):
         conn = db.get_db_connection()
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT id FROM transport_master_parameters WHERE param_key = %s;", (param_key,))
-                if cur.fetchone():
-                    param_key = f"{base_key}_{int(datetime.now().timestamp())}"
+                # Remove from deleted tombstones if re-adding
+                cur.execute("DELETE FROM deleted_master_parameters WHERE module = 'transport' AND param_key = %s;", (param_key,))
 
-                cur.execute(
-                    """
-                    INSERT INTO transport_master_parameters (
-                        s_no, param_key, param_name, section, section_order,
-                        input_type, unit, formula, display_order, is_system, is_active
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
-                    RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
-                    """,
-                    (s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order)
-                )
+                cur.execute("SELECT id FROM transport_master_parameters WHERE param_key = %s;", (param_key,))
+                existing_row = cur.fetchone()
+                if existing_row:
+                    cur.execute(
+                        """
+                        UPDATE transport_master_parameters
+                        SET s_no = %s, param_name = %s, section = %s, section_order = %s,
+                            input_type = %s, unit = %s, formula = %s, display_order = %s, is_active = TRUE
+                        WHERE id = %s
+                        RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
+                        """,
+                        (s_no, param_name, section, section_order, input_type, unit, formula, display_order, existing_row[0])
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO transport_master_parameters (
+                            s_no, param_key, param_name, section, section_order,
+                            input_type, unit, formula, display_order, is_system, is_active
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
+                        RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
+                        """,
+                        (s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order)
+                    )
                 new_row = cur.fetchone()
                 conn.commit()
                 col_names = [d[0] for d in cur.description]
@@ -2095,19 +2130,22 @@ def update_transport_parameter(param_id: int, req: Dict[str, Any]):
 @app.delete("/api/transport/parameters/{param_id}")
 def delete_transport_parameter(param_id: int):
     """
-    Soft-deletes or removes a transport parameter.
+    Soft-deletes a transport parameter and records a permanent deletion tombstone.
     """
     try:
-        param = db.execute_query("SELECT id, is_system FROM transport_master_parameters WHERE id = %s;", (param_id,), fetch_all=False)
+        param = db.execute_query("SELECT id, param_key, param_name, is_system FROM transport_master_parameters WHERE id = %s;", (param_id,), fetch_all=False)
         if not param:
             raise HTTPException(status_code=404, detail="Transport parameter not found")
 
-        # Non-system custom parameters can be removed completely
-        if param and not param.get("is_system"):
-            db.execute_commit("DELETE FROM transport_master_parameters WHERE id = %s;", (param_id,))
-        else:
-            db.execute_commit("UPDATE transport_master_parameters SET is_active = FALSE WHERE id = %s;", (param_id,))
-        return {"status": "success", "message": "Transport parameter removed successfully"}
+        pkey = param.get("param_key")
+        db.execute_commit("UPDATE transport_master_parameters SET is_active = FALSE WHERE id = %s;", (param_id,))
+        if pkey:
+            db.execute_commit("""
+                INSERT INTO deleted_master_parameters (module, param_key)
+                VALUES ('transport', %s)
+                ON CONFLICT (module, param_key) DO NOTHING;
+            """, (pkey,))
+        return {"status": "success", "message": f"Transport parameter '{param.get('param_name')}' removed successfully"}
     except HTTPException:
         raise
     except Exception as e:

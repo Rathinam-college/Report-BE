@@ -101,11 +101,39 @@ def ensure_and_seed_transport_parameters():
         # 4. Remove any test rows
         db.execute_commit("DELETE FROM transport_master_parameters WHERE param_key ILIKE %s;", ('%test%',))
 
-        # 5. Upsert 47 canonical parameters
+        # 5. Upsert 47 canonical parameters (Respecting user deletions permanently)
         conn = db.get_db_connection()
         try:
             with conn.cursor() as cur:
+                # Ensure deleted tombstones table exists
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS deleted_master_parameters (
+                        module VARCHAR(50) NOT NULL,
+                        param_key VARCHAR(100) NOT NULL,
+                        deleted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (module, param_key)
+                    );
+                """)
+
+                # Fetch all keys explicitly deleted by user
+                cur.execute("SELECT param_key FROM deleted_master_parameters WHERE module = 'transport';")
+                deleted_keys = set(r[0] for r in cur.fetchall())
+
+                # Also sync any currently inactive rows as tombstones so they are never reactivated
+                cur.execute("SELECT param_key FROM transport_master_parameters WHERE is_active = FALSE;")
+                for r in cur.fetchall():
+                    deleted_keys.add(r[0])
+                    cur.execute("""
+                        INSERT INTO deleted_master_parameters (module, param_key)
+                        VALUES ('transport', %s)
+                        ON CONFLICT DO NOTHING;
+                    """, (r[0],))
+
                 for s_no, key, name, sec, sec_ord, disp_ord, in_type, unit, formula in CANONICAL_TRANSPORT_PARAMETERS:
+                    if key in deleted_keys:
+                        # User explicitly deleted this parameter! Do not insert or reactivate!
+                        continue
+
                     cur.execute('''
                         INSERT INTO transport_master_parameters (
                             s_no, param_key, param_name, section, section_order, display_order, input_type, unit, formula, is_system, is_active
@@ -118,8 +146,7 @@ def ensure_and_seed_transport_parameters():
                             display_order = EXCLUDED.display_order,
                             input_type = EXCLUDED.input_type,
                             unit = EXCLUDED.unit,
-                            formula = EXCLUDED.formula,
-                            is_active = TRUE;
+                            formula = EXCLUDED.formula;
                     ''', (s_no, key, name, sec, sec_ord, disp_ord, in_type, unit, formula))
                 conn.commit()
         finally:

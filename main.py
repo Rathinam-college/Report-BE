@@ -560,19 +560,32 @@ def delete_period(period_id: int):
 @app.get("/api/overview")
 def get_overview(module: str = "food"):
     try:
-        mod = module or "food"
+        mod = (module or "food").lower()
         rows = db.execute_query("""
             SELECT 
                 p.period_code,
                 p.period_label,
                 p.start_date,
-                COALESCE(SUM(e.amount), 0) AS total
+                COALESCE(SUM(
+                    CASE 
+                        WHEN %s = 'food' AND (
+                            LOWER(ec.name) LIKE '%total person%' 
+                            OR LOWER(ec.name) LIKE '%cost per person%' 
+                            OR LOWER(ec.name) LIKE '%per person%'
+                            OR LOWER(ec.name) LIKE '%diners%' 
+                        )
+                        THEN 0 
+                        ELSE e.amount 
+                    END
+                ), 0) AS total
             FROM billing_periods p
             LEFT JOIN monthly_expense_entries e ON p.id = e.period_id AND e.module = %s
+            LEFT JOIN cost_heads ch ON e.cost_head_id = ch.id
+            LEFT JOIN expense_categories ec ON ch.category_id = ec.id
             WHERE p.module = %s
             GROUP BY p.period_code, p.period_label, p.start_date
             ORDER BY p.start_date
-        """, (mod, mod))
+        """, (mod, mod, mod))
 
         grand_total = sum(float(r["total"]) for r in rows)
         avg_monthly = grand_total / len(rows) if rows else 0
@@ -716,10 +729,22 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
         grand_total_by_period = {p["id"]: 0.0 for p in periods}
         overall_grand_total = 0.0
 
+        def is_excluded_from_grand_total(cat_name: str) -> bool:
+            if (module or "food").lower() != "food":
+                return False
+            n = (cat_name or "").lower().strip()
+            return any(k in n for k in [
+                "total person", "cost per person", "per person", 
+                "total persons", "persons count", "diners", 
+                "per meal", "unit economics"
+            ])
+
         categories_data = []
 
         for cat in categories:
             cat_id = cat["id"]
+            cat_name = cat.get("name") or ""
+            is_non_expense = is_excluded_from_grand_total(cat_name)
             cat_items = [ch for ch in cost_heads if ch["category_id"] == cat_id]
             if not cat_items:
                 continue
@@ -747,11 +772,13 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
                     if val is not None:
                         row_total += val
                         cat_subtotal_by_period[p_id] += val
-                        grand_total_by_period[p_id] += val
+                        if not is_non_expense:
+                            grand_total_by_period[p_id] += val
 
                 row_avg = round(row_total / num_periods, 2)
                 cat_total += row_total
-                overall_grand_total += row_total
+                if not is_non_expense:
+                    overall_grand_total += row_total
 
                 formatted_items.append({
                     "cost_head_id": ch_id,
@@ -823,12 +850,14 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
 
         for fcat in formula_cats:
             fc_total = 0.0
+            is_fcat_non_expense = is_excluded_from_grand_total(fcat.get("category_name"))
             for p in periods:
                 pid = p["id"]
                 val = fcat["subtotal"]["amounts"].get(str(pid), 0.0)
                 fc_total += val
-                grand_total_by_period[pid] += val
-                overall_grand_total += val
+                if not is_fcat_non_expense:
+                    grand_total_by_period[pid] += val
+                    overall_grand_total += val
             fcat["subtotal"]["total"] = round(fc_total, 2)
             fcat["subtotal"]["avg"] = round(fc_total / num_periods, 2)
             if fcat["items"]:

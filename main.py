@@ -986,7 +986,7 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
                             h_dict[ck] = cv
                 hostel_census_data[str(hr["period_id"])] = h_dict
 
-            if module == 'hostel':
+            if module in ('hostel', 'all', None):
                 try:
                     hb_rows = db.execute_query("SELECT * FROM hostel_budget_tracking ORDER BY s_no ASC")
                     for hbr in hb_rows:
@@ -1106,7 +1106,7 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
             "grand_total": grand_total_data,
             "census": census_data,
             "hostel_census": hostel_census_data,
-            "hostel_budget_tracking": hostel_budget_tracking_data if module == "hostel" else None,
+            "hostel_budget_tracking": hostel_budget_tracking_data if (module in ('hostel', 'all', None) or hostel_budget_tracking_data) else None,
             "transport_census": transport_census_data,
             "transport_census_by_branch": transport_census_by_branch if module == "transport" else None,
             "matrix_by_branch": matrix_by_branch if module == "transport" else None,
@@ -3410,7 +3410,7 @@ def save_hostel_census_bulk(req: Dict[str, Any]):
 @app.get("/api/hostel/budget-tracking")
 def get_hostel_budget_tracking():
     """
-    Returns the official 9-head Hostel Budget Tracking Summary (Sanctioned, Month Limit, Actuals Oct'26-May'27).
+    Returns the official 9-head Hostel Budget Tracking Summary (Sanctioned, Month Limit, Actuals Oct'26-May'27) directly from PostgreSQL.
     """
     try:
         rows = db.execute_query("SELECT * FROM hostel_budget_tracking ORDER BY s_no ASC")
@@ -3420,12 +3420,24 @@ def get_hostel_budget_tracking():
                 k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
                 for k, v in r.items()
             })
+        
+        months = [
+            "oct_26_actual", "nov_26_actual", "dec_26_actual", "jan_27_actual",
+            "feb_27_actual", "mar_27_actual", "apr_27_actual", "may_27_actual"
+        ]
+        monthly_totals = {
+            m: sum(float(r.get(m) or 0) for r in data)
+            for m in months
+        }
+
         return {
             "status": "success",
             "items": data,
-            "total_sanctioned": sum(r.get("sanctioned_amount", 0) for r in data),
-            "total_month_limit": sum(r.get("month_limit", 0) for r in data),
-            "total_oct_26_actual": sum(r.get("oct_26_actual", 0) for r in data)
+            "total_sanctioned": sum(float(r.get("sanctioned_amount") or 0) for r in data),
+            "total_month_limit": sum(float(r.get("month_limit") or 0) for r in data),
+            "monthly_totals": monthly_totals,
+            "total_oct_26_actual": monthly_totals.get("oct_26_actual", 0.0),
+            "total_nov_26_actual": monthly_totals.get("nov_26_actual", 0.0)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

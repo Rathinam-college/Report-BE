@@ -497,6 +497,56 @@ def batch_delete_periods(req: Dict[str, Any]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/api/hostel/budget-tracking")
+def update_hostel_budget_tracking(req: Dict[str, Any]):
+    """
+    Updates or inserts budget heads and actual monthly expenses.
+    """
+    try:
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                items = req.get("items") if isinstance(req, dict) and "items" in req else ([req] if isinstance(req, dict) else req)
+                for item in items:
+                    b_head = item.get("budget_head")
+                    if not b_head:
+                        continue
+                    cur.execute("""
+                        INSERT INTO hostel_budget_tracking (
+                            s_no, budget_head, sanctioned_amount, month_limit, 
+                            oct_26_actual, nov_26_actual, dec_26_actual, jan_27_actual,
+                            feb_27_actual, mar_27_actual, apr_27_actual, may_27_actual
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (budget_head) DO UPDATE SET
+                            sanctioned_amount = CASE WHEN EXCLUDED.sanctioned_amount > 0 THEN EXCLUDED.sanctioned_amount ELSE hostel_budget_tracking.sanctioned_amount END,
+                            month_limit = CASE WHEN EXCLUDED.month_limit > 0 THEN EXCLUDED.month_limit ELSE hostel_budget_tracking.month_limit END,
+                            oct_26_actual = CASE WHEN EXCLUDED.oct_26_actual IS NOT NULL THEN EXCLUDED.oct_26_actual ELSE hostel_budget_tracking.oct_26_actual END,
+                            nov_26_actual = CASE WHEN EXCLUDED.nov_26_actual IS NOT NULL THEN EXCLUDED.nov_26_actual ELSE hostel_budget_tracking.nov_26_actual END,
+                            dec_26_actual = CASE WHEN EXCLUDED.dec_26_actual IS NOT NULL THEN EXCLUDED.dec_26_actual ELSE hostel_budget_tracking.dec_26_actual END,
+                            jan_27_actual = CASE WHEN EXCLUDED.jan_27_actual IS NOT NULL THEN EXCLUDED.jan_27_actual ELSE hostel_budget_tracking.jan_27_actual END,
+                            feb_27_actual = CASE WHEN EXCLUDED.feb_27_actual IS NOT NULL THEN EXCLUDED.feb_27_actual ELSE hostel_budget_tracking.feb_27_actual END,
+                            mar_27_actual = CASE WHEN EXCLUDED.mar_27_actual IS NOT NULL THEN EXCLUDED.mar_27_actual ELSE hostel_budget_tracking.mar_27_actual END,
+                            apr_27_actual = CASE WHEN EXCLUDED.apr_27_actual IS NOT NULL THEN EXCLUDED.apr_27_actual ELSE hostel_budget_tracking.apr_27_actual END,
+                            may_27_actual = CASE WHEN EXCLUDED.may_27_actual IS NOT NULL THEN EXCLUDED.may_27_actual ELSE hostel_budget_tracking.may_27_actual END;
+                    """, (
+                        item.get("s_no", 1), b_head, item.get("sanctioned_amount") or 0.0, item.get("month_limit") or 0.0,
+                        item.get("oct_26_actual"), item.get("nov_26_actual"), item.get("dec_26_actual"), item.get("jan_27_actual"),
+                        item.get("feb_27_actual"), item.get("mar_27_actual"), item.get("apr_27_actual"), item.get("may_27_actual")
+                    ))
+                conn.commit()
+                return {"status": "success", "message": "Hostel budget tracking updated successfully"}
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.put("/api/periods/{period_id}")
 def update_period(period_id: int, req: PeriodUpdate):
     """
@@ -524,6 +574,7 @@ def update_period(period_id: int, req: PeriodUpdate):
             db.release_db_connection(conn)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.delete("/api/periods/{period_id}")
 def delete_period(period_id: int):
@@ -915,6 +966,7 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
 
         # Query Hostel Census / Operational Metrics (when module == 'hostel')
         hostel_census_data = {}
+        hostel_budget_tracking_data = []
         try:
             h_rows = db.execute_query("SELECT * FROM hostel_census_entries")
             for hr in h_rows:
@@ -933,6 +985,17 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
                         if ck not in h_dict:
                             h_dict[ck] = cv
                 hostel_census_data[str(hr["period_id"])] = h_dict
+
+            if module == 'hostel':
+                try:
+                    hb_rows = db.execute_query("SELECT * FROM hostel_budget_tracking ORDER BY s_no ASC")
+                    for hbr in hb_rows:
+                        hostel_budget_tracking_data.append({
+                            k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
+                            for k, v in hbr.items()
+                        })
+                except Exception as b_err:
+                    print(f"[Hostel Budget Query Notice] {b_err}")
         except Exception as he:
             print(f"[Hostel Census Query Notice] {he}")
 
@@ -1043,6 +1106,7 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
             "grand_total": grand_total_data,
             "census": census_data,
             "hostel_census": hostel_census_data,
+            "hostel_budget_tracking": hostel_budget_tracking_data if module == "hostel" else None,
             "transport_census": transport_census_data,
             "transport_census_by_branch": transport_census_by_branch if module == "transport" else None,
             "matrix_by_branch": matrix_by_branch if module == "transport" else None,
@@ -1292,6 +1356,7 @@ def reorder_cost_heads(req: ReorderCostHeadsRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.delete("/api/master/cost-heads/{cost_head_id}")
 def delete_cost_head(cost_head_id: int):
     try:
@@ -1351,6 +1416,7 @@ def batch_delete_cost_heads(req: BatchDeleteRequest):
             db.release_db_connection(conn)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/master/categories")
 def get_categories(module: Optional[str] = None):
@@ -1722,9 +1788,7 @@ def reorder_categories(req: ReorderCategoriesRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# -------------------------------------------------------------
-# CATEGORY FORMULAS & FUNCTIONS CRUD
-# -------------------------------------------------------------
+
 @app.get("/api/master/category-formulas")
 def get_category_formulas(module: Optional[str] = None):
     try:
@@ -2211,6 +2275,7 @@ def reorder_transport_parameters(req: ReorderParametersRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/api/hostel/parameters/reorder")
 def reorder_hostel_parameters(req: ReorderParametersRequest):
     """
@@ -2231,9 +2296,12 @@ def reorder_hostel_parameters(req: ReorderParametersRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
 # -------------------------------------------------------------
-# HOSTEL CENSUS CALCULATION & PERSISTENCE HELPER
+# CENSUS COMPUTATION & UPSERT HELPERS
 # -------------------------------------------------------------
+
 def _clean_num(val, default=0.0):
     if val is None or val == "":
         return default
@@ -2245,34 +2313,18 @@ def _clean_num(val, default=0.0):
     except Exception:
         return default
 
+
 def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
-    cur.execute("SELECT * FROM hostel_census_entries WHERE period_id = %s;", (period_id,))
-    existing_row = cur.fetchone()
-    existing = {}
-    if existing_row:
-        if isinstance(existing_row, dict):
-            existing = existing_row
-        elif hasattr(cur, 'description') and cur.description:
-            col_names = [desc[0] for desc in cur.description]
-            existing = dict(zip(col_names, existing_row))
-
-    def get_f(key, fallback):
-        if key in hc and hc[key] is not None and hc[key] != "":
-            return hc[key]
-        if key in existing and existing[key] is not None:
-            return existing[key]
-        return fallback
-
-    bc_b = int(_clean_num(get_f("bed_capacity_boys", 2223)))
-    bc_g = int(_clean_num(get_f("bed_capacity_girls", 896)))
+    bc_b = int(_clean_num(hc.get("bed_capacity_boys"), 2223))
+    bc_g = int(_clean_num(hc.get("bed_capacity_girls"), 896))
     bc_tot = bc_b + bc_g
 
-    st_b = int(_clean_num(get_f("students_boys", 2075)))
-    st_g = int(_clean_num(get_f("students_girls", 768)))
+    st_b = int(_clean_num(hc.get("students_boys"), 2075))
+    st_g = int(_clean_num(hc.get("students_girls"), 768))
     st_tot = st_b + st_g
 
-    sf_b = int(_clean_num(get_f("staff_boys", 72)))
-    sf_g = int(_clean_num(get_f("staff_girls", 59)))
+    sf_b = int(_clean_num(hc.get("staff_boys"), 72))
+    sf_g = int(_clean_num(hc.get("staff_girls"), 59))
     sf_tot = sf_b + sf_g
 
     occ_b = st_b + sf_b
@@ -2283,16 +2335,16 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
     vac_g = bc_g - occ_g
     vac_tot = vac_b + vac_g
 
-    vac_coll_b = int(_clean_num(get_f("vacant_college_boys", vac_b - 41)))
-    vac_coll_g = int(_clean_num(get_f("vacant_college_girls", vac_g)))
+    vac_coll_b = int(_clean_num(hc.get("vacant_college_boys"), vac_b - 41))
+    vac_coll_g = int(_clean_num(hc.get("vacant_college_girls"), vac_g))
     vac_coll_tot = vac_coll_b + vac_coll_g
 
-    vac_sp_b = int(_clean_num(get_f("vacant_sports_boys", 0)))
-    vac_sp_g = int(_clean_num(get_f("vacant_sports_girls", 0)))
+    vac_sp_b = int(_clean_num(hc.get("vacant_sports_boys"), 0))
+    vac_sp_g = int(_clean_num(hc.get("vacant_sports_girls"), 0))
     vac_sp_tot = vac_sp_b + vac_sp_g
 
-    vac_sc_b = int(_clean_num(get_f("vacant_school_boys", 0)))
-    vac_sc_g = int(_clean_num(get_f("vacant_school_girls", 0)))
+    vac_sc_b = int(_clean_num(hc.get("vacant_school_boys"), 0))
+    vac_sc_g = int(_clean_num(hc.get("vacant_school_girls"), 0))
     vac_sc_tot = vac_sc_b + vac_sc_g
 
     occ_pct_b = round((occ_b / bc_b * 100), 2) if bc_b > 0 else 0.0
@@ -2303,43 +2355,43 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
     vac_pct_g = round((vac_g / bc_g * 100), 2) if bc_g > 0 else 0.0
     vac_pct = round((vac_tot / bc_tot * 100), 2) if bc_tot > 0 else 0.0
 
-    st_vacated = int(_clean_num(get_f("students_vacated", 0)))
+    st_vacated = int(_clean_num(hc.get("students_vacated"), 0))
 
-    t_rec = int(_clean_num(get_f("tickets_received", 0)))
-    t_cls = int(_clean_num(get_f("tickets_closed", 0)))
+    t_rec = int(_clean_num(hc.get("tickets_received"), 0))
+    t_cls = int(_clean_num(hc.get("tickets_closed"), 0))
     t_opn = max(0, t_rec - t_cls)
 
-    tot_hrs = float(_clean_num(get_f("total_hours_close", 0.0)))
-    tat_hrs = float(_clean_num(get_f("tat_hours", 62.29)))
+    tot_hrs = float(_clean_num(hc.get("total_hours_close"), 0.0))
+    tat_hrs = float(_clean_num(hc.get("tat_hours"), 62.29))
 
-    q_rec = int(_clean_num(get_f("quality_issues_received", 0)))
-    q_cls = int(_clean_num(get_f("quality_issues_closed", 0)))
-    q_opn = max(0, q_rec - q_cls)
+    q_rec = int(_clean_num(hc.get("quality_issues_received"), 0))
+    q_cls = int(_clean_num(hc.get("quality_issues_closed"), 0))
+    q_open = max(0, q_rec - q_cls)
 
-    incidents = int(_clean_num(get_f("incidents_count", 0)))
+    incidents = int(_clean_num(hc.get("incidents_count"), 0))
 
-    p_units = int(_clean_num(get_f("power_units", 0)))
-    p_cost = float(_clean_num(get_f("power_cost", 0.0)))
-    w_pur = float(_clean_num(get_f("water_purchase_cost", 0.0)))
-    maint_exp = float(_clean_num(get_f("maintenance_expenses", 119394.0)))
-    exp_occ = float(_clean_num(get_f("expenses_occurred", 9349172.0)))
+    p_units = int(_clean_num(hc.get("power_units"), 0))
+    p_cost = float(_clean_num(hc.get("power_cost"), 0.0))
+    w_pur = float(_clean_num(hc.get("water_purchase_cost"), 0.0))
+    maint_exp = float(_clean_num(hc.get("maintenance_expenses"), 119394.0))
+    exp_occ = float(_clean_num(hc.get("expenses_occurred"), 9349172.0))
 
-    app_bud = float(_clean_num(get_f("approved_budget", 131788118.0)))
-    cum_bud = float(_clean_num(get_f("cumulative_budget_spent", 0.0)))
+    app_bud = float(_clean_num(hc.get("approved_budget"), 142010789.0))
+    cum_bud = float(_clean_num(hc.get("cumulative_budget_spent"), 0.0))
     bal = app_bud - cum_bud
 
-    nw_ltr = int(_clean_num(get_f("normal_water_litres", 0)))
-    nw_cost = float(_clean_num(get_f("normal_water_cost", 0.0)))
-    dw_ltr = int(_clean_num(get_f("drinking_water_litres", 0)))
-    dw_cost = float(_clean_num(get_f("drinking_water_cost", 0.0)))
+    nw_ltr = int(_clean_num(hc.get("normal_water_litres"), 0))
+    nw_cost = float(_clean_num(hc.get("normal_water_cost"), 0.0))
+    dw_ltr = int(_clean_num(hc.get("drinking_water_litres"), 0))
+    dw_cost = float(_clean_num(hc.get("drinking_water_cost"), 0.0))
 
-    sq_ft = float(_clean_num(get_f("sq_feet", 231701.0)))
+    sq_ft = float(_clean_num(hc.get("sq_feet"), 231701.0))
     per_st_mo = round(exp_occ / st_tot, 2) if st_tot > 0 else 0.0
     per_st_day = round(per_st_mo / 30.0, 2)
     sq_ft_occ = round(sq_ft / occ_tot, 2) if occ_tot > 0 else (round(sq_ft / st_tot, 2) if st_tot > 0 else 0.0)
 
-    nw_st_ltr = round(nw_ltr / st_tot, 2) if st_tot > 0 else float(_clean_num(get_f("normal_water_student_ltrs", 0.0)))
-    nw_st_cost = round(nw_cost / st_tot, 2) if st_tot > 0 else float(_clean_num(get_f("normal_water_student_cost", 88.0)))
+    nw_st_ltr = round(nw_ltr / st_tot, 2) if st_tot > 0 else float(_clean_num(hc.get("normal_water_student_ltrs"), 0.0))
+    nw_st_cost = round(nw_cost / st_tot, 2) if st_tot > 0 else float(_clean_num(hc.get("normal_water_student_cost"), 88.0))
 
     p_sqft = round(p_cost / sq_ft, 2) if sq_ft > 0 else 0.0
     p_occ_u = round(p_units / occ_tot, 2) if occ_tot > 0 else 0.0
@@ -2352,38 +2404,6 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
     dw_day_c = round(dw_cost / occ_tot / 30.0, 2) if occ_tot > 0 else 0.0
 
     remarks = str(hc.get("remarks") or "")
-
-    custom_metrics = hc.get("custom_metrics")
-    if not isinstance(custom_metrics, dict):
-        custom_metrics = existing.get("custom_metrics") or {}
-        if isinstance(custom_metrics, str):
-            try:
-                custom_metrics = json.loads(custom_metrics)
-            except Exception:
-                custom_metrics = {}
-    if not isinstance(custom_metrics, dict):
-        custom_metrics = {}
-
-    for k, v in hc.items():
-        if k not in (
-            "id", "period_id", "created_at", "bed_capacity_boys", "bed_capacity_girls", "bed_capacity_total",
-            "students_boys", "students_girls", "students_total", "staff_boys", "staff_girls", "staff_total",
-            "total_occupied_boys", "total_occupied_girls", "total_occupied", "vacant_boys", "vacant_girls",
-            "vacant_total", "vacant_college_boys", "vacant_college_girls", "vacant_college", "vacant_sports_boys",
-            "vacant_sports_girls", "vacant_sports_total", "vacant_school_boys", "vacant_school_girls",
-            "vacant_school_total", "occupied_pct_boys", "occupied_pct_girls", "occupied_pct", "vacant_pct_boys",
-            "vacant_pct_girls", "vacant_pct", "students_vacated", "tickets_received", "tickets_closed",
-            "tickets_open", "total_hours_close", "tat_hours", "quality_issues_received", "quality_issues_closed",
-            "quality_issues_open", "incidents_count", "power_units", "power_cost", "water_purchase_cost",
-            "maintenance_expenses", "expenses_occurred", "approved_budget", "cumulative_budget_spent", "balance",
-            "normal_water_litres", "normal_water_cost", "drinking_water_litres", "drinking_water_cost", "sq_feet",
-            "per_student_cost_month", "per_student_cost_day", "sq_feet_per_occupant", "normal_water_student_ltrs",
-            "normal_water_student_cost", "power_cost_sqft", "units_per_occupant", "power_cost_occupant",
-            "normal_water_ltr_day", "normal_water_cost_day", "drinking_water_ltr_day", "drinking_water_cost_day",
-            "remarks", "custom_metrics"
-        ) and not k.startswith("temp_"):
-            custom_metrics[k] = v
-    custom_metrics_json = json.dumps(custom_metrics)
 
     hc_sql = """
     INSERT INTO hostel_census_entries (
@@ -2410,7 +2430,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         power_cost_sqft, units_per_occupant, power_cost_occupant,
         normal_water_ltr_day, normal_water_cost_day,
         drinking_water_ltr_day, drinking_water_cost_day,
-        remarks, custom_metrics
+        remarks
     ) VALUES (
         %s, %s, %s, %s,
         %s, %s, %s,
@@ -2435,7 +2455,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         %s, %s, %s,
         %s, %s,
         %s, %s,
-        %s, %s
+        %s
     )
     ON CONFLICT (period_id) DO UPDATE SET
         bed_capacity_boys = EXCLUDED.bed_capacity_boys,
@@ -2503,8 +2523,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         normal_water_cost_day = EXCLUDED.normal_water_cost_day,
         drinking_water_ltr_day = EXCLUDED.drinking_water_ltr_day,
         drinking_water_cost_day = EXCLUDED.drinking_water_cost_day,
-        remarks = EXCLUDED.remarks,
-        custom_metrics = EXCLUDED.custom_metrics;
+        remarks = EXCLUDED.remarks;
     """
     cur.execute(hc_sql, (
         period_id, bc_b, bc_g, bc_tot,
@@ -2530,8 +2549,10 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         p_sqft, p_occ_u, p_occ_c,
         nw_day_ltr, nw_day_c,
         dw_day_ltr, dw_day_c,
-        remarks, custom_metrics_json
+        remarks
     ))
+
+
 
 def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any], branch: str = "Common"):
     b_val = branch or "Common"
@@ -2552,19 +2573,19 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
             return existing[key]
         return fallback
 
-    vehicles_count = str(get_f("vehicles_count", "0"))
-    passengers_count = int(_clean_num(get_f("passengers_count", 0)))
-    students_count = int(_clean_num(get_f("students_count", get_f("students_count_income", get_f("students_count_fee", 0)))))
-    staff_count = int(_clean_num(get_f("staff_count", get_f("staff_count_income", 0))))
+    vehicles_count = str(get_f("vehicles_count", "18+1"))
+    passengers_count = int(_clean_num(get_f("passengers_count", 447)))
+    students_count = int(_clean_num(get_f("students_count", 412)))
+    staff_count = int(_clean_num(get_f("staff_count", 35)))
 
-    approved_kms = float(_clean_num(get_f("approved_kms", 0.0)))
-    actual_kms = float(_clean_num(get_f("actual_kms", 0.0)))
-    additional_kms = float(_clean_num(get_f("additional_kms", 0.0)))
-    excess_kms_rps = float(_clean_num(get_f("excess_minus_kms_rps", get_f("excess_kms_rps", actual_kms - approved_kms))))
-    excess_km_billed_rps = float(_clean_num(get_f("excess_kms_billed_rps", get_f("excess_km_billed_rps", 0.0))))
+    approved_kms = float(_clean_num(get_f("approved_kms", 26691.0)))
+    actual_kms = float(_clean_num(get_f("actual_kms", 25777.0)))
+    additional_kms = float(_clean_num(get_f("additional_kms", 2481.0)))
+    excess_kms_rps = float(_clean_num(get_f("excess_kms_rps", 0.0)))
+    excess_km_billed_rps = float(_clean_num(get_f("excess_km_billed_rps", 0.0)))
 
-    fuel_expenses = float(_clean_num(get_f("fuel_expenses", 0.0)))
-    diesel_litres = float(_clean_num(get_f("diesel_litres", 0.0)))
+    fuel_expenses = float(_clean_num(get_f("fuel_expenses", 487375.0)))
+    diesel_litres = float(_clean_num(get_f("diesel_litres", 5184.84)))
     fc_cost = float(_clean_num(get_f("fc_cost", 0.0)))
     statutory_cost = float(_clean_num(get_f("statutory_cost", 0.0)))
     repair_maintenance_cost = float(_clean_num(get_f("repair_maintenance_cost", 0.0)))
@@ -2574,9 +2595,9 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
     # Row 15: Total Expenses = SUM(fuel + fc + statutory + repair + employee + other)
     total_expenses = fuel_expenses + fc_cost + statutory_cost + repair_maintenance_cost + employee_cost + other_cost
 
-    fee_demand = float(_clean_num(get_f("fee_demand", get_f("demand_fee", 0.0))))
+    fee_demand = float(_clean_num(get_f("fee_demand", 0.0)))
     fee_discount = float(_clean_num(get_f("fee_discount", 0.0)))
-    fee_collected = float(_clean_num(get_f("fee_collected", get_f("paid_fee", 0.0))))
+    fee_collected = float(_clean_num(get_f("fee_collected", 0.0)))
     fee_unpaid = max(0.0, fee_demand - fee_discount - fee_collected)
 
     rps_monthly_billing = float(_clean_num(get_f("rps_monthly_billing", 0.0)))
@@ -2588,14 +2609,14 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
     cumulative_income = (fee_collected + rps_monthly_billing + staff_travel_deduction + 
                          additional_kms_billed_rps + additional_kms_others_billing + cab_billing)
 
-    approved_budget = float(_clean_num(get_f("approved_budget", 0.0)))
+    approved_budget = float(_clean_num(get_f("approved_budget", 13730137.73)))
     cumulative_budget_spent = float(_clean_num(get_f("cumulative_budget_spent", 0.0)))
     if cumulative_budget_spent == 0.0 and total_expenses > 0.0:
         cumulative_budget_spent = total_expenses
     balance = approved_budget - cumulative_budget_spent
 
-    service_tickets_raised = int(_clean_num(get_f("service_tickets_raised", 0)))
-    service_tickets_closed = int(_clean_num(get_f("service_tickets_closed", 0)))
+    service_tickets_raised = int(_clean_num(get_f("service_tickets_raised", 38)))
+    service_tickets_closed = int(_clean_num(get_f("service_tickets_closed", 38)))
     service_tickets_open = max(0, service_tickets_raised - service_tickets_closed)
 
     quality_issues_received = int(_clean_num(get_f("quality_issues_received", 0)))
@@ -2603,39 +2624,16 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
     quality_issues_open = max(0, quality_issues_received - quality_issues_closed)
 
     statutory_compliance = int(_clean_num(get_f("statutory_compliance", 1)))
-    incidents_count = int(_clean_num(get_f("incidents_count", 0)))
+    incidents_count = int(_clean_num(get_f("incidents_count", 1)))
 
     per_student_cost_expenses = round(total_expenses / passengers_count, 2) if passengers_count > 0 else 0.0
     per_student_fee_year = round(fee_demand / students_count, 2) if students_count > 0 else 0.0
     demand_per_km_day = round(fee_demand / (actual_kms * 30), 2) if actual_kms > 0 else 0.0
-    km_per_veh_day = round(actual_kms / (19.0 * 30.0), 2) if actual_kms > 0 else 0.0
+    km_per_veh_day = round(actual_kms / (19.0 * 30.0), 2)
     fuel_cost_per_km = round(fuel_expenses / actual_kms, 2) if actual_kms > 0 else 0.0
     diesel_per_100km = round((diesel_litres / actual_kms) * 100.0, 2) if actual_kms > 0 else 0.0
 
     remarks = str(tc.get("remarks") if "remarks" in tc else existing.get("remarks", ""))
-    
-    # Harvest custom metrics from tc
-    custom_metrics = dict(tc.get("custom_metrics") or {}) if isinstance(tc.get("custom_metrics"), dict) else {}
-    known_keys = {
-        "id", "period_id", "branch", "created_at", "vehicles_count", "passengers_count", "students_count", "staff_count",
-        "approved_kms", "actual_kms", "additional_kms", "excess_kms_rps", "excess_km_billed_rps",
-        "excess_minus_kms_rps", "excess_kms_billed_rps", "students_count_income", "staff_count_income",
-        "students_count_fee", "demand_fee", "paid_fee",
-        "fuel_expenses", "diesel_litres", "fc_cost", "statutory_cost",
-        "repair_maintenance_cost", "employee_cost", "other_cost", "total_expenses",
-        "fee_demand", "fee_discount", "fee_collected", "fee_unpaid",
-        "rps_monthly_billing", "staff_travel_deduction", "additional_kms_billed_rps", "additional_kms_others_billing", "cab_billing", "cumulative_income",
-        "approved_budget", "cumulative_budget_spent", "balance",
-        "service_tickets_raised", "service_tickets_closed", "service_tickets_open",
-        "quality_issues_received", "quality_issues_closed", "quality_issues_open",
-        "statutory_compliance", "incidents_count",
-        "per_student_cost_expenses", "per_student_fee_year", "demand_per_km_day", "km_per_veh_day",
-        "fuel_cost_per_km", "diesel_per_100km", "remarks", "custom_metrics"
-    }
-    for k, v in tc.items():
-        if k not in known_keys and not k.startswith("temp_"):
-            custom_metrics[k] = v
-    custom_metrics_json = json.dumps(custom_metrics)
 
     tc_sql = """
     INSERT INTO transport_census_entries (
@@ -2650,7 +2648,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         quality_issues_received, quality_issues_closed, quality_issues_open,
         statutory_compliance, incidents_count,
         per_student_cost_expenses, per_student_fee_year, demand_per_km_day, km_per_veh_day,
-        fuel_cost_per_km, diesel_per_100km, remarks, custom_metrics
+        fuel_cost_per_km, diesel_per_100km, remarks
     ) VALUES (
         %s, %s, %s, %s, %s, %s,
         %s, %s, %s, %s, %s,
@@ -2663,7 +2661,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         %s, %s, %s,
         %s, %s,
         %s, %s, %s, %s,
-        %s, %s, %s, %s
+        %s, %s, %s
     )
     ON CONFLICT (period_id, branch) DO UPDATE SET
         vehicles_count = EXCLUDED.vehicles_count,
@@ -2710,8 +2708,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         km_per_veh_day = EXCLUDED.km_per_veh_day,
         fuel_cost_per_km = EXCLUDED.fuel_cost_per_km,
         diesel_per_100km = EXCLUDED.diesel_per_100km,
-        remarks = EXCLUDED.remarks,
-        custom_metrics = EXCLUDED.custom_metrics;
+        remarks = EXCLUDED.remarks;
     """
     cur.execute(tc_sql, (
         period_id, b_val, vehicles_count, passengers_count, students_count, staff_count,
@@ -2725,12 +2722,439 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         quality_issues_received, quality_issues_closed, quality_issues_open,
         statutory_compliance, incidents_count,
         per_student_cost_expenses, per_student_fee_year, demand_per_km_day, km_per_veh_day,
-        fuel_cost_per_km, diesel_per_100km, remarks, custom_metrics_json
+        fuel_cost_per_km, diesel_per_100km, remarks
     ))
 
+
+
 # -------------------------------------------------------------
-# WORKSTATION BATCH SAVE & ACTIONS
+# CENSUS COMPUTATION & UPSERT HELPERS
 # -------------------------------------------------------------
+
+def _clean_num(val, default=0.0):
+    if val is None or val == "":
+        return default
+    if isinstance(val, (int, float)):
+        return val
+    try:
+        s = str(val).replace(",", "").replace("%", "").strip()
+        return float(s) if "." in s else int(s)
+    except Exception:
+        return default
+
+
+def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
+    bc_b = int(_clean_num(hc.get("bed_capacity_boys"), 2223))
+    bc_g = int(_clean_num(hc.get("bed_capacity_girls"), 896))
+    bc_tot = bc_b + bc_g
+
+    st_b = int(_clean_num(hc.get("students_boys"), 2075))
+    st_g = int(_clean_num(hc.get("students_girls"), 768))
+    st_tot = st_b + st_g
+
+    sf_b = int(_clean_num(hc.get("staff_boys"), 72))
+    sf_g = int(_clean_num(hc.get("staff_girls"), 59))
+    sf_tot = sf_b + sf_g
+
+    occ_b = st_b + sf_b
+    occ_g = st_g + sf_g
+    occ_tot = occ_b + occ_g
+
+    vac_b = bc_b - occ_b
+    vac_g = bc_g - occ_g
+    vac_tot = vac_b + vac_g
+
+    vac_coll_b = int(_clean_num(hc.get("vacant_college_boys"), vac_b - 41))
+    vac_coll_g = int(_clean_num(hc.get("vacant_college_girls"), vac_g))
+    vac_coll_tot = vac_coll_b + vac_coll_g
+
+    vac_sp_b = int(_clean_num(hc.get("vacant_sports_boys"), 0))
+    vac_sp_g = int(_clean_num(hc.get("vacant_sports_girls"), 0))
+    vac_sp_tot = vac_sp_b + vac_sp_g
+
+    vac_sc_b = int(_clean_num(hc.get("vacant_school_boys"), 0))
+    vac_sc_g = int(_clean_num(hc.get("vacant_school_girls"), 0))
+    vac_sc_tot = vac_sc_b + vac_sc_g
+
+    occ_pct_b = round((occ_b / bc_b * 100), 2) if bc_b > 0 else 0.0
+    occ_pct_g = round((occ_g / bc_g * 100), 2) if bc_g > 0 else 0.0
+    occ_pct = round((occ_tot / bc_tot * 100), 2) if bc_tot > 0 else 0.0
+
+    vac_pct_b = round((vac_b / bc_b * 100), 2) if bc_b > 0 else 0.0
+    vac_pct_g = round((vac_g / bc_g * 100), 2) if bc_g > 0 else 0.0
+    vac_pct = round((vac_tot / bc_tot * 100), 2) if bc_tot > 0 else 0.0
+
+    st_vacated = int(_clean_num(hc.get("students_vacated"), 0))
+
+    t_rec = int(_clean_num(hc.get("tickets_received"), 0))
+    t_cls = int(_clean_num(hc.get("tickets_closed"), 0))
+    t_opn = max(0, t_rec - t_cls)
+
+    tot_hrs = float(_clean_num(hc.get("total_hours_close"), 0.0))
+    tat_hrs = float(_clean_num(hc.get("tat_hours"), 62.29))
+
+    q_rec = int(_clean_num(hc.get("quality_issues_received"), 0))
+    q_cls = int(_clean_num(hc.get("quality_issues_closed"), 0))
+    q_open = max(0, q_rec - q_cls)
+
+    incidents = int(_clean_num(hc.get("incidents_count"), 0))
+
+    p_units = int(_clean_num(hc.get("power_units"), 0))
+    p_cost = float(_clean_num(hc.get("power_cost"), 0.0))
+    w_pur = float(_clean_num(hc.get("water_purchase_cost"), 0.0))
+    maint_exp = float(_clean_num(hc.get("maintenance_expenses"), 119394.0))
+    exp_occ = float(_clean_num(hc.get("expenses_occurred"), 9349172.0))
+
+    app_bud = float(_clean_num(hc.get("approved_budget"), 142010789.0))
+    cum_bud = float(_clean_num(hc.get("cumulative_budget_spent"), 0.0))
+    bal = app_bud - cum_bud
+
+    nw_ltr = int(_clean_num(hc.get("normal_water_litres"), 0))
+    nw_cost = float(_clean_num(hc.get("normal_water_cost"), 0.0))
+    dw_ltr = int(_clean_num(hc.get("drinking_water_litres"), 0))
+    dw_cost = float(_clean_num(hc.get("drinking_water_cost"), 0.0))
+
+    sq_ft = float(_clean_num(hc.get("sq_feet"), 231701.0))
+    per_st_mo = round(exp_occ / st_tot, 2) if st_tot > 0 else 0.0
+    per_st_day = round(per_st_mo / 30.0, 2)
+    sq_ft_occ = round(sq_ft / occ_tot, 2) if occ_tot > 0 else (round(sq_ft / st_tot, 2) if st_tot > 0 else 0.0)
+
+    nw_st_ltr = round(nw_ltr / st_tot, 2) if st_tot > 0 else float(_clean_num(hc.get("normal_water_student_ltrs"), 0.0))
+    nw_st_cost = round(nw_cost / st_tot, 2) if st_tot > 0 else float(_clean_num(hc.get("normal_water_student_cost"), 88.0))
+
+    p_sqft = round(p_cost / sq_ft, 2) if sq_ft > 0 else 0.0
+    p_occ_u = round(p_units / occ_tot, 2) if occ_tot > 0 else 0.0
+    p_occ_c = round(p_cost / occ_tot, 2) if occ_tot > 0 else 0.0
+
+    nw_day_ltr = round(nw_ltr / occ_tot / 30.0, 2) if occ_tot > 0 else 0.0
+    nw_day_c = round(nw_cost / occ_tot / 30.0, 2) if occ_tot > 0 else 0.0
+
+    dw_day_ltr = round(dw_ltr / occ_tot / 30.0, 2) if occ_tot > 0 else 0.0
+    dw_day_c = round(dw_cost / occ_tot / 30.0, 2) if occ_tot > 0 else 0.0
+
+    remarks = str(hc.get("remarks") or "")
+
+    hc_sql = """
+    INSERT INTO hostel_census_entries (
+        period_id, bed_capacity_boys, bed_capacity_girls, bed_capacity_total,
+        students_boys, students_girls, students_total,
+        staff_boys, staff_girls, staff_total,
+        total_occupied_boys, total_occupied_girls, total_occupied,
+        vacant_boys, vacant_girls, vacant_total,
+        vacant_college_boys, vacant_college_girls, vacant_college,
+        vacant_sports_boys, vacant_sports_girls, vacant_sports_total,
+        vacant_school_boys, vacant_school_girls, vacant_school_total,
+        occupied_pct_boys, occupied_pct_girls, occupied_pct,
+        vacant_pct_boys, vacant_pct_girls, vacant_pct,
+        students_vacated,
+        tickets_received, tickets_closed, tickets_open, total_hours_close, tat_hours,
+        quality_issues_received, quality_issues_closed, quality_issues_open, incidents_count,
+        power_units, power_cost, water_purchase_cost,
+        maintenance_expenses, expenses_occurred,
+        approved_budget, cumulative_budget_spent, balance,
+        normal_water_litres, normal_water_cost,
+        drinking_water_litres, drinking_water_cost,
+        sq_feet, per_student_cost_month, per_student_cost_day,
+        sq_feet_per_occupant, normal_water_student_ltrs, normal_water_student_cost,
+        power_cost_sqft, units_per_occupant, power_cost_occupant,
+        normal_water_ltr_day, normal_water_cost_day,
+        drinking_water_ltr_day, drinking_water_cost_day,
+        remarks
+    ) VALUES (
+        %s, %s, %s, %s,
+        %s, %s, %s,
+        %s, %s, %s,
+        %s, %s, %s,
+        %s, %s, %s,
+        %s, %s, %s,
+        %s, %s, %s,
+        %s, %s, %s,
+        %s, %s, %s,
+        %s, %s, %s,
+        %s,
+        %s, %s, %s, %s, %s,
+        %s, %s, %s, %s,
+        %s, %s, %s,
+        %s, %s,
+        %s, %s, %s,
+        %s, %s,
+        %s, %s,
+        %s, %s, %s,
+        %s, %s, %s,
+        %s, %s, %s,
+        %s, %s,
+        %s, %s,
+        %s
+    )
+    ON CONFLICT (period_id) DO UPDATE SET
+        bed_capacity_boys = EXCLUDED.bed_capacity_boys,
+        bed_capacity_girls = EXCLUDED.bed_capacity_girls,
+        bed_capacity_total = EXCLUDED.bed_capacity_total,
+        students_boys = EXCLUDED.students_boys,
+        students_girls = EXCLUDED.students_girls,
+        students_total = EXCLUDED.students_total,
+        staff_boys = EXCLUDED.staff_boys,
+        staff_girls = EXCLUDED.staff_girls,
+        staff_total = EXCLUDED.staff_total,
+        total_occupied_boys = EXCLUDED.total_occupied_boys,
+        total_occupied_girls = EXCLUDED.total_occupied_girls,
+        total_occupied = EXCLUDED.total_occupied,
+        vacant_boys = EXCLUDED.vacant_boys,
+        vacant_girls = EXCLUDED.vacant_girls,
+        vacant_total = EXCLUDED.vacant_total,
+        vacant_college_boys = EXCLUDED.vacant_college_boys,
+        vacant_college_girls = EXCLUDED.vacant_college_girls,
+        vacant_college = EXCLUDED.vacant_college,
+        vacant_sports_boys = EXCLUDED.vacant_sports_boys,
+        vacant_sports_girls = EXCLUDED.vacant_sports_girls,
+        vacant_sports_total = EXCLUDED.vacant_sports_total,
+        vacant_school_boys = EXCLUDED.vacant_school_boys,
+        vacant_school_girls = EXCLUDED.vacant_school_girls,
+        vacant_school_total = EXCLUDED.vacant_school_total,
+        occupied_pct_boys = EXCLUDED.occupied_pct_boys,
+        occupied_pct_girls = EXCLUDED.occupied_pct_girls,
+        occupied_pct = EXCLUDED.occupied_pct,
+        vacant_pct_boys = EXCLUDED.vacant_pct_boys,
+        vacant_pct_girls = EXCLUDED.vacant_pct_girls,
+        vacant_pct = EXCLUDED.vacant_pct,
+        students_vacated = EXCLUDED.students_vacated,
+        tickets_received = EXCLUDED.tickets_received,
+        tickets_closed = EXCLUDED.tickets_closed,
+        tickets_open = EXCLUDED.tickets_open,
+        total_hours_close = EXCLUDED.total_hours_close,
+        tat_hours = EXCLUDED.tat_hours,
+        quality_issues_received = EXCLUDED.quality_issues_received,
+        quality_issues_closed = EXCLUDED.quality_issues_closed,
+        quality_issues_open = EXCLUDED.quality_issues_open,
+        incidents_count = EXCLUDED.incidents_count,
+        power_units = EXCLUDED.power_units,
+        power_cost = EXCLUDED.power_cost,
+        water_purchase_cost = EXCLUDED.water_purchase_cost,
+        maintenance_expenses = EXCLUDED.maintenance_expenses,
+        expenses_occurred = EXCLUDED.expenses_occurred,
+        approved_budget = EXCLUDED.approved_budget,
+        cumulative_budget_spent = EXCLUDED.cumulative_budget_spent,
+        balance = EXCLUDED.balance,
+        normal_water_litres = EXCLUDED.normal_water_litres,
+        normal_water_cost = EXCLUDED.normal_water_cost,
+        drinking_water_litres = EXCLUDED.drinking_water_litres,
+        drinking_water_cost = EXCLUDED.drinking_water_cost,
+        sq_feet = EXCLUDED.sq_feet,
+        per_student_cost_month = EXCLUDED.per_student_cost_month,
+        per_student_cost_day = EXCLUDED.per_student_cost_day,
+        sq_feet_per_occupant = EXCLUDED.sq_feet_per_occupant,
+        normal_water_student_ltrs = EXCLUDED.normal_water_student_ltrs,
+        normal_water_student_cost = EXCLUDED.normal_water_student_cost,
+        power_cost_sqft = EXCLUDED.power_cost_sqft,
+        units_per_occupant = EXCLUDED.units_per_occupant,
+        power_cost_occupant = EXCLUDED.power_cost_occupant,
+        normal_water_ltr_day = EXCLUDED.normal_water_ltr_day,
+        normal_water_cost_day = EXCLUDED.normal_water_cost_day,
+        drinking_water_ltr_day = EXCLUDED.drinking_water_ltr_day,
+        drinking_water_cost_day = EXCLUDED.drinking_water_cost_day,
+        remarks = EXCLUDED.remarks;
+    """
+    cur.execute(hc_sql, (
+        period_id, bc_b, bc_g, bc_tot,
+        st_b, st_g, st_tot,
+        sf_b, sf_g, sf_tot,
+        occ_b, occ_g, occ_tot,
+        vac_b, vac_g, vac_tot,
+        vac_coll_b, vac_coll_g, vac_coll_tot,
+        vac_sp_b, vac_sp_g, vac_sp_tot,
+        vac_sc_b, vac_sc_g, vac_sc_tot,
+        occ_pct_b, occ_pct_g, occ_pct,
+        vac_pct_b, vac_pct_g, vac_pct,
+        st_vacated,
+        t_rec, t_cls, t_opn, tot_hrs, tat_hrs,
+        q_rec, q_cls, q_opn, incidents,
+        p_units, p_cost, w_pur,
+        maint_exp, exp_occ,
+        app_bud, cum_bud, bal,
+        nw_ltr, nw_cost,
+        dw_ltr, dw_cost,
+        sq_ft, per_st_mo, per_st_day,
+        sq_ft_occ, nw_st_ltr, nw_st_cost,
+        p_sqft, p_occ_u, p_occ_c,
+        nw_day_ltr, nw_day_c,
+        dw_day_ltr, dw_day_c,
+        remarks
+    ))
+
+
+
+def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any], branch: str = "Common"):
+    b_val = branch or "Common"
+    cur.execute("SELECT * FROM transport_census_entries WHERE period_id = %s AND branch = %s;", (period_id, b_val))
+    existing_row = cur.fetchone()
+    existing = {}
+    if existing_row:
+        if isinstance(existing_row, dict):
+            existing = existing_row
+        elif hasattr(cur, 'description') and cur.description:
+            col_names = [desc[0] for desc in cur.description]
+            existing = dict(zip(col_names, existing_row))
+
+    def get_f(key, fallback):
+        if key in tc and tc[key] is not None and tc[key] != "":
+            return tc[key]
+        if key in existing and existing[key] is not None:
+            return existing[key]
+        return fallback
+
+    vehicles_count = str(get_f("vehicles_count", "18+1"))
+    passengers_count = int(_clean_num(get_f("passengers_count", 447)))
+    students_count = int(_clean_num(get_f("students_count", 412)))
+    staff_count = int(_clean_num(get_f("staff_count", 35)))
+
+    approved_kms = float(_clean_num(get_f("approved_kms", 26691.0)))
+    actual_kms = float(_clean_num(get_f("actual_kms", 25777.0)))
+    additional_kms = float(_clean_num(get_f("additional_kms", 2481.0)))
+    excess_kms_rps = float(_clean_num(get_f("excess_kms_rps", 0.0)))
+    excess_km_billed_rps = float(_clean_num(get_f("excess_km_billed_rps", 0.0)))
+
+    fuel_expenses = float(_clean_num(get_f("fuel_expenses", 487375.0)))
+    diesel_litres = float(_clean_num(get_f("diesel_litres", 5184.84)))
+    fc_cost = float(_clean_num(get_f("fc_cost", 0.0)))
+    statutory_cost = float(_clean_num(get_f("statutory_cost", 0.0)))
+    repair_maintenance_cost = float(_clean_num(get_f("repair_maintenance_cost", 0.0)))
+    employee_cost = float(_clean_num(get_f("employee_cost", 0.0)))
+    other_cost = float(_clean_num(get_f("other_cost", 0.0)))
+
+    # Row 15: Total Expenses = SUM(fuel + fc + statutory + repair + employee + other)
+    total_expenses = fuel_expenses + fc_cost + statutory_cost + repair_maintenance_cost + employee_cost + other_cost
+
+    fee_demand = float(_clean_num(get_f("fee_demand", 0.0)))
+    fee_discount = float(_clean_num(get_f("fee_discount", 0.0)))
+    fee_collected = float(_clean_num(get_f("fee_collected", 0.0)))
+    fee_unpaid = max(0.0, fee_demand - fee_discount - fee_collected)
+
+    rps_monthly_billing = float(_clean_num(get_f("rps_monthly_billing", 0.0)))
+    staff_travel_deduction = float(_clean_num(get_f("staff_travel_deduction", 0.0)))
+    additional_kms_billed_rps = float(_clean_num(get_f("additional_kms_billed_rps", 0.0)))
+    additional_kms_others_billing = float(_clean_num(get_f("additional_kms_others_billing", 0.0)))
+    cab_billing = float(_clean_num(get_f("cab_billing", 0.0)))
+
+    cumulative_income = (fee_collected + rps_monthly_billing + staff_travel_deduction + 
+                         additional_kms_billed_rps + additional_kms_others_billing + cab_billing)
+
+    approved_budget = float(_clean_num(get_f("approved_budget", 13730137.73)))
+    cumulative_budget_spent = float(_clean_num(get_f("cumulative_budget_spent", 0.0)))
+    if cumulative_budget_spent == 0.0 and total_expenses > 0.0:
+        cumulative_budget_spent = total_expenses
+    balance = approved_budget - cumulative_budget_spent
+
+    service_tickets_raised = int(_clean_num(get_f("service_tickets_raised", 38)))
+    service_tickets_closed = int(_clean_num(get_f("service_tickets_closed", 38)))
+    service_tickets_open = max(0, service_tickets_raised - service_tickets_closed)
+
+    quality_issues_received = int(_clean_num(get_f("quality_issues_received", 0)))
+    quality_issues_closed = int(_clean_num(get_f("quality_issues_closed", 0)))
+    quality_issues_open = max(0, quality_issues_received - quality_issues_closed)
+
+    statutory_compliance = int(_clean_num(get_f("statutory_compliance", 1)))
+    incidents_count = int(_clean_num(get_f("incidents_count", 1)))
+
+    per_student_cost_expenses = round(total_expenses / passengers_count, 2) if passengers_count > 0 else 0.0
+    per_student_fee_year = round(fee_demand / students_count, 2) if students_count > 0 else 0.0
+    demand_per_km_day = round(fee_demand / (actual_kms * 30), 2) if actual_kms > 0 else 0.0
+    km_per_veh_day = round(actual_kms / (19.0 * 30.0), 2)
+    fuel_cost_per_km = round(fuel_expenses / actual_kms, 2) if actual_kms > 0 else 0.0
+    diesel_per_100km = round((diesel_litres / actual_kms) * 100.0, 2) if actual_kms > 0 else 0.0
+
+    remarks = str(tc.get("remarks") if "remarks" in tc else existing.get("remarks", ""))
+
+    tc_sql = """
+    INSERT INTO transport_census_entries (
+        period_id, branch, vehicles_count, passengers_count, students_count, staff_count,
+        approved_kms, actual_kms, additional_kms, excess_kms_rps, excess_km_billed_rps,
+        fuel_expenses, diesel_litres, fc_cost, statutory_cost,
+        repair_maintenance_cost, employee_cost, other_cost, total_expenses,
+        fee_demand, fee_discount, fee_collected, fee_unpaid,
+        rps_monthly_billing, staff_travel_deduction, additional_kms_billed_rps, additional_kms_others_billing, cab_billing, cumulative_income,
+        approved_budget, cumulative_budget_spent, balance,
+        service_tickets_raised, service_tickets_closed, service_tickets_open,
+        quality_issues_received, quality_issues_closed, quality_issues_open,
+        statutory_compliance, incidents_count,
+        per_student_cost_expenses, per_student_fee_year, demand_per_km_day, km_per_veh_day,
+        fuel_cost_per_km, diesel_per_100km, remarks
+    ) VALUES (
+        %s, %s, %s, %s, %s, %s,
+        %s, %s, %s, %s, %s,
+        %s, %s, %s, %s,
+        %s, %s, %s, %s,
+        %s, %s, %s, %s,
+        %s, %s, %s, %s, %s, %s,
+        %s, %s, %s,
+        %s, %s, %s,
+        %s, %s, %s,
+        %s, %s,
+        %s, %s, %s, %s,
+        %s, %s, %s
+    )
+    ON CONFLICT (period_id, branch) DO UPDATE SET
+        vehicles_count = EXCLUDED.vehicles_count,
+        passengers_count = EXCLUDED.passengers_count,
+        students_count = EXCLUDED.students_count,
+        staff_count = EXCLUDED.staff_count,
+        approved_kms = EXCLUDED.approved_kms,
+        actual_kms = EXCLUDED.actual_kms,
+        additional_kms = EXCLUDED.additional_kms,
+        excess_kms_rps = EXCLUDED.excess_kms_rps,
+        excess_km_billed_rps = EXCLUDED.excess_km_billed_rps,
+        fuel_expenses = EXCLUDED.fuel_expenses,
+        diesel_litres = EXCLUDED.diesel_litres,
+        fc_cost = EXCLUDED.fc_cost,
+        statutory_cost = EXCLUDED.statutory_cost,
+        repair_maintenance_cost = EXCLUDED.repair_maintenance_cost,
+        employee_cost = EXCLUDED.employee_cost,
+        other_cost = EXCLUDED.other_cost,
+        total_expenses = EXCLUDED.total_expenses,
+        fee_demand = EXCLUDED.fee_demand,
+        fee_discount = EXCLUDED.fee_discount,
+        fee_collected = EXCLUDED.fee_collected,
+        fee_unpaid = EXCLUDED.fee_unpaid,
+        rps_monthly_billing = EXCLUDED.rps_monthly_billing,
+        staff_travel_deduction = EXCLUDED.staff_travel_deduction,
+        additional_kms_billed_rps = EXCLUDED.additional_kms_billed_rps,
+        additional_kms_others_billing = EXCLUDED.additional_kms_others_billing,
+        cab_billing = EXCLUDED.cab_billing,
+        cumulative_income = EXCLUDED.cumulative_income,
+        approved_budget = EXCLUDED.approved_budget,
+        cumulative_budget_spent = EXCLUDED.cumulative_budget_spent,
+        balance = EXCLUDED.balance,
+        service_tickets_raised = EXCLUDED.service_tickets_raised,
+        service_tickets_closed = EXCLUDED.service_tickets_closed,
+        service_tickets_open = EXCLUDED.service_tickets_open,
+        quality_issues_received = EXCLUDED.quality_issues_received,
+        quality_issues_closed = EXCLUDED.quality_issues_closed,
+        quality_issues_open = EXCLUDED.quality_issues_open,
+        statutory_compliance = EXCLUDED.statutory_compliance,
+        incidents_count = EXCLUDED.incidents_count,
+        per_student_cost_expenses = EXCLUDED.per_student_cost_expenses,
+        per_student_fee_year = EXCLUDED.per_student_fee_year,
+        demand_per_km_day = EXCLUDED.demand_per_km_day,
+        km_per_veh_day = EXCLUDED.km_per_veh_day,
+        fuel_cost_per_km = EXCLUDED.fuel_cost_per_km,
+        diesel_per_100km = EXCLUDED.diesel_per_100km,
+        remarks = EXCLUDED.remarks;
+    """
+    cur.execute(tc_sql, (
+        period_id, b_val, vehicles_count, passengers_count, students_count, staff_count,
+        approved_kms, actual_kms, additional_kms, excess_kms_rps, excess_km_billed_rps,
+        fuel_expenses, diesel_litres, fc_cost, statutory_cost,
+        repair_maintenance_cost, employee_cost, other_cost, total_expenses,
+        fee_demand, fee_discount, fee_collected, fee_unpaid,
+        rps_monthly_billing, staff_travel_deduction, additional_kms_billed_rps, additional_kms_others_billing, cab_billing, cumulative_income,
+        approved_budget, cumulative_budget_spent, balance,
+        service_tickets_raised, service_tickets_closed, service_tickets_open,
+        quality_issues_received, quality_issues_closed, quality_issues_open,
+        statutory_compliance, incidents_count,
+        per_student_cost_expenses, per_student_fee_year, demand_per_km_day, km_per_veh_day,
+        fuel_cost_per_km, diesel_per_100km, remarks
+    ))
+
+
 @app.post("/api/workstation/batch-save")
 @app.post("/api/batch-entry")
 def batch_save_workstation_data(req: BatchSaveRequest):
@@ -2796,6 +3220,7 @@ def batch_save_workstation_data(req: BatchSaveRequest):
             db.release_db_connection(conn)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/workstation/spreadsheet-save")
 def spreadsheet_save_all(req: SpreadsheetSaveRequest):
@@ -2903,6 +3328,7 @@ def spreadsheet_save_all(req: SpreadsheetSaveRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/api/hostel-census/{period_id}")
 def save_hostel_census_direct(period_id: int, req: Dict[str, Any]):
     """
@@ -2942,6 +3368,7 @@ def save_hostel_census_direct(period_id: int, req: Dict[str, Any]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/api/hostel-census-bulk")
 def save_hostel_census_bulk(req: Dict[str, Any]):
     """
@@ -2975,6 +3402,31 @@ def save_hostel_census_bulk(req: Dict[str, Any]):
             raise
         finally:
             db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@app.get("/api/hostel/budget-tracking")
+def get_hostel_budget_tracking():
+    """
+    Returns the official 9-head Hostel Budget Tracking Summary (Sanctioned, Month Limit, Actuals Oct'26-May'27).
+    """
+    try:
+        rows = db.execute_query("SELECT * FROM hostel_budget_tracking ORDER BY s_no ASC")
+        data = []
+        for r in rows:
+            data.append({
+                k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
+                for k, v in r.items()
+            })
+        return {
+            "status": "success",
+            "items": data,
+            "total_sanctioned": sum(r.get("sanctioned_amount", 0) for r in data),
+            "total_month_limit": sum(r.get("month_limit", 0) for r in data),
+            "total_oct_26_actual": sum(r.get("oct_26_actual", 0) for r in data)
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -3066,6 +3518,7 @@ def save_transport_census_direct(period_id: int, req: Dict[str, Any]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/api/transport-census-bulk")
 def save_transport_census_bulk(req: Dict[str, Any]):
     """
@@ -3106,6 +3559,7 @@ def save_transport_census_bulk(req: Dict[str, Any]):
             db.release_db_connection(conn)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/workstation/clone")
 def clone_period_data(req: ClonePeriodRequest):
@@ -3441,9 +3895,7 @@ def save_page_access_permissions(req: PagePermissionsBatch):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# -------------------------------------------------------------
-# SQL DATABASE DUMP, RELOAD & DUMMY DATA MANAGEMENT
-# -------------------------------------------------------------
+
 @app.get("/api/system/backup")
 def download_database_backup():
     try:

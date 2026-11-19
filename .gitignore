@@ -7,4 +7,6 @@ env/
 .env
 .env.local
 *.log
+*.db
+*.sqlite3
 .DS_Store

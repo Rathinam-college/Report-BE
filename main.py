@@ -55,6 +55,11 @@ def ensure_schema_compatibility():
         "ALTER TABLE billing_periods ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';",
         "ALTER TABLE hostel_census_entries ADD COLUMN IF NOT EXISTS custom_metrics JSONB DEFAULT '{}'::jsonb;",
         "ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS custom_metrics JSONB DEFAULT '{}'::jsonb;",
+        "ALTER TABLE hostel_budget_tracking ADD COLUMN IF NOT EXISTS sep_25_actual NUMERIC DEFAULT 0.0;",
+        "ALTER TABLE hostel_budget_tracking ADD COLUMN IF NOT EXISTS jun_27_actual NUMERIC DEFAULT 0.0;",
+        "ALTER TABLE hostel_budget_tracking ADD COLUMN IF NOT EXISTS jul_27_actual NUMERIC DEFAULT 0.0;",
+        "ALTER TABLE hostel_budget_tracking ADD COLUMN IF NOT EXISTS aug_27_actual NUMERIC DEFAULT 0.0;",
+        "ALTER TABLE hostel_budget_tracking ADD COLUMN IF NOT EXISTS sep_27_actual NUMERIC DEFAULT 0.0;",
         """
         CREATE TABLE IF NOT EXISTS hostel_master_parameters (
             id SERIAL PRIMARY KEY,
@@ -501,39 +506,47 @@ def batch_delete_periods(req: Dict[str, Any]):
 @app.post("/api/hostel/budget-tracking")
 def update_hostel_budget_tracking(req: Dict[str, Any]):
     """
-    Updates or inserts budget heads and actual monthly expenses.
+    Updates or inserts budget heads and actual monthly expenses for all billing cycle months.
     """
     try:
         conn = db.get_db_connection()
         try:
             with conn.cursor() as cur:
                 items = req.get("items") if isinstance(req, dict) and "items" in req else ([req] if isinstance(req, dict) else req)
+                month_cols = [
+                    "sep_25_actual", "oct_26_actual", "nov_26_actual", "dec_26_actual",
+                    "jan_27_actual", "feb_27_actual", "mar_27_actual", "apr_27_actual",
+                    "may_27_actual", "jun_27_actual", "jul_27_actual", "aug_27_actual",
+                    "sep_27_actual"
+                ]
                 for item in items:
                     b_head = item.get("budget_head")
                     if not b_head:
                         continue
-                    cur.execute("""
-                        INSERT INTO hostel_budget_tracking (
-                            s_no, budget_head, sanctioned_amount, month_limit, 
-                            oct_26_actual, nov_26_actual, dec_26_actual, jan_27_actual,
-                            feb_27_actual, mar_27_actual, apr_27_actual, may_27_actual
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    
+                    cols = ["s_no", "budget_head", "sanctioned_amount", "month_limit"] + month_cols
+                    vals = [
+                        item.get("s_no", 1), b_head, item.get("sanctioned_amount") or 0.0, item.get("month_limit") or 0.0
+                    ] + [item.get(col) for col in month_cols]
+                    
+                    placeholders = ", ".join(["%s"] * len(cols))
+                    col_names = ", ".join(cols)
+                    
+                    update_set = [
+                        "sanctioned_amount = CASE WHEN EXCLUDED.sanctioned_amount IS NOT NULL AND EXCLUDED.sanctioned_amount >= 0 THEN EXCLUDED.sanctioned_amount ELSE hostel_budget_tracking.sanctioned_amount END",
+                        "month_limit = CASE WHEN EXCLUDED.month_limit IS NOT NULL AND EXCLUDED.month_limit >= 0 THEN EXCLUDED.month_limit ELSE hostel_budget_tracking.month_limit END"
+                    ]
+                    for col in month_cols:
+                        update_set.append(f"{col} = CASE WHEN EXCLUDED.{col} IS NOT NULL THEN EXCLUDED.{col} ELSE hostel_budget_tracking.{col} END")
+                    
+                    update_clause = ", ".join(update_set)
+                    
+                    cur.execute(f"""
+                        INSERT INTO hostel_budget_tracking ({col_names})
+                        VALUES ({placeholders})
                         ON CONFLICT (budget_head) DO UPDATE SET
-                            sanctioned_amount = CASE WHEN EXCLUDED.sanctioned_amount IS NOT NULL AND EXCLUDED.sanctioned_amount >= 0 THEN EXCLUDED.sanctioned_amount ELSE hostel_budget_tracking.sanctioned_amount END,
-                            month_limit = CASE WHEN EXCLUDED.month_limit IS NOT NULL AND EXCLUDED.month_limit >= 0 THEN EXCLUDED.month_limit ELSE hostel_budget_tracking.month_limit END,
-                            oct_26_actual = CASE WHEN EXCLUDED.oct_26_actual IS NOT NULL THEN EXCLUDED.oct_26_actual ELSE hostel_budget_tracking.oct_26_actual END,
-                            nov_26_actual = CASE WHEN EXCLUDED.nov_26_actual IS NOT NULL THEN EXCLUDED.nov_26_actual ELSE hostel_budget_tracking.nov_26_actual END,
-                            dec_26_actual = CASE WHEN EXCLUDED.dec_26_actual IS NOT NULL THEN EXCLUDED.dec_26_actual ELSE hostel_budget_tracking.dec_26_actual END,
-                            jan_27_actual = CASE WHEN EXCLUDED.jan_27_actual IS NOT NULL THEN EXCLUDED.jan_27_actual ELSE hostel_budget_tracking.jan_27_actual END,
-                            feb_27_actual = CASE WHEN EXCLUDED.feb_27_actual IS NOT NULL THEN EXCLUDED.feb_27_actual ELSE hostel_budget_tracking.feb_27_actual END,
-                            mar_27_actual = CASE WHEN EXCLUDED.mar_27_actual IS NOT NULL THEN EXCLUDED.mar_27_actual ELSE hostel_budget_tracking.mar_27_actual END,
-                            apr_27_actual = CASE WHEN EXCLUDED.apr_27_actual IS NOT NULL THEN EXCLUDED.apr_27_actual ELSE hostel_budget_tracking.apr_27_actual END,
-                            may_27_actual = CASE WHEN EXCLUDED.may_27_actual IS NOT NULL THEN EXCLUDED.may_27_actual ELSE hostel_budget_tracking.may_27_actual END;
-                    """, (
-                        item.get("s_no", 1), b_head, item.get("sanctioned_amount") or 0.0, item.get("month_limit") or 0.0,
-                        item.get("oct_26_actual"), item.get("nov_26_actual"), item.get("dec_26_actual"), item.get("jan_27_actual"),
-                        item.get("feb_27_actual"), item.get("mar_27_actual"), item.get("apr_27_actual"), item.get("may_27_actual")
-                    ))
+                            {update_clause};
+                    """, tuple(vals))
                 conn.commit()
                 return {"status": "success", "message": "Hostel budget tracking updated successfully"}
         except Exception:
@@ -2405,6 +2418,15 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
 
     remarks = str(hc.get("remarks") or "")
 
+    # Serialize custom metrics and budget heads
+    custom_metrics_dict = {}
+    if isinstance(hc.get("custom_metrics"), dict):
+        custom_metrics_dict.update(hc["custom_metrics"])
+    for k, v in hc.items():
+        if k.startswith("budget_") or k.startswith("sanctioned_") or k.startswith("limit_") or k.startswith("param_") or k.startswith("custom_"):
+            custom_metrics_dict[k] = v
+    custom_metrics_json = json.dumps(custom_metrics_dict)
+
     hc_sql = """
     INSERT INTO hostel_census_entries (
         period_id, bed_capacity_boys, bed_capacity_girls, bed_capacity_total,
@@ -2430,7 +2452,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         power_cost_sqft, units_per_occupant, power_cost_occupant,
         normal_water_ltr_day, normal_water_cost_day,
         drinking_water_ltr_day, drinking_water_cost_day,
-        remarks
+        remarks, custom_metrics
     ) VALUES (
         %s, %s, %s, %s,
         %s, %s, %s,
@@ -2455,7 +2477,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         %s, %s, %s,
         %s, %s,
         %s, %s,
-        %s
+        %s, %s
     )
     ON CONFLICT (period_id) DO UPDATE SET
         bed_capacity_boys = EXCLUDED.bed_capacity_boys,
@@ -2523,7 +2545,8 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         normal_water_cost_day = EXCLUDED.normal_water_cost_day,
         drinking_water_ltr_day = EXCLUDED.drinking_water_ltr_day,
         drinking_water_cost_day = EXCLUDED.drinking_water_cost_day,
-        remarks = EXCLUDED.remarks;
+        remarks = EXCLUDED.remarks,
+        custom_metrics = CASE WHEN EXCLUDED.custom_metrics IS NOT NULL AND EXCLUDED.custom_metrics::text != '{}' THEN EXCLUDED.custom_metrics ELSE hostel_census_entries.custom_metrics END;
     """
     cur.execute(hc_sql, (
         period_id, bc_b, bc_g, bc_tot,
@@ -2549,7 +2572,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         p_sqft, p_occ_u, p_occ_c,
         nw_day_ltr, nw_day_c,
         dw_day_ltr, dw_day_c,
-        remarks
+        remarks, custom_metrics_json
     ))
 
 
@@ -2834,6 +2857,15 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
 
     remarks = str(hc.get("remarks") or "")
 
+    # Serialize custom metrics and budget heads
+    custom_metrics_dict = {}
+    if isinstance(hc.get("custom_metrics"), dict):
+        custom_metrics_dict.update(hc["custom_metrics"])
+    for k, v in hc.items():
+        if k.startswith("budget_") or k.startswith("sanctioned_") or k.startswith("limit_") or k.startswith("param_") or k.startswith("custom_"):
+            custom_metrics_dict[k] = v
+    custom_metrics_json = json.dumps(custom_metrics_dict)
+
     hc_sql = """
     INSERT INTO hostel_census_entries (
         period_id, bed_capacity_boys, bed_capacity_girls, bed_capacity_total,
@@ -2859,7 +2891,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         power_cost_sqft, units_per_occupant, power_cost_occupant,
         normal_water_ltr_day, normal_water_cost_day,
         drinking_water_ltr_day, drinking_water_cost_day,
-        remarks
+        remarks, custom_metrics
     ) VALUES (
         %s, %s, %s, %s,
         %s, %s, %s,
@@ -2884,7 +2916,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         %s, %s, %s,
         %s, %s,
         %s, %s,
-        %s
+        %s, %s
     )
     ON CONFLICT (period_id) DO UPDATE SET
         bed_capacity_boys = EXCLUDED.bed_capacity_boys,
@@ -2952,7 +2984,8 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         normal_water_cost_day = EXCLUDED.normal_water_cost_day,
         drinking_water_ltr_day = EXCLUDED.drinking_water_ltr_day,
         drinking_water_cost_day = EXCLUDED.drinking_water_cost_day,
-        remarks = EXCLUDED.remarks;
+        remarks = EXCLUDED.remarks,
+        custom_metrics = CASE WHEN EXCLUDED.custom_metrics IS NOT NULL AND EXCLUDED.custom_metrics::text != '{}' THEN EXCLUDED.custom_metrics ELSE hostel_census_entries.custom_metrics END;
     """
     cur.execute(hc_sql, (
         period_id, bc_b, bc_g, bc_tot,
@@ -2978,7 +3011,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
         p_sqft, p_occ_u, p_occ_c,
         nw_day_ltr, nw_day_c,
         dw_day_ltr, dw_day_c,
-        remarks
+        remarks, custom_metrics_json
     ))
 
 
@@ -3422,8 +3455,10 @@ def get_hostel_budget_tracking():
             })
         
         months = [
-            "oct_26_actual", "nov_26_actual", "dec_26_actual", "jan_27_actual",
-            "feb_27_actual", "mar_27_actual", "apr_27_actual", "may_27_actual"
+            "sep_25_actual", "oct_26_actual", "nov_26_actual", "dec_26_actual",
+            "jan_27_actual", "feb_27_actual", "mar_27_actual", "apr_27_actual",
+            "may_27_actual", "jun_27_actual", "jul_27_actual", "aug_27_actual",
+            "sep_27_actual"
         ]
         monthly_totals = {
             m: sum(float(r.get(m) or 0) for r in data)

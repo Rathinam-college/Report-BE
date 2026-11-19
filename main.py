@@ -519,8 +519,8 @@ def update_hostel_budget_tracking(req: Dict[str, Any]):
                             feb_27_actual, mar_27_actual, apr_27_actual, may_27_actual
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (budget_head) DO UPDATE SET
-                            sanctioned_amount = CASE WHEN EXCLUDED.sanctioned_amount > 0 THEN EXCLUDED.sanctioned_amount ELSE hostel_budget_tracking.sanctioned_amount END,
-                            month_limit = CASE WHEN EXCLUDED.month_limit > 0 THEN EXCLUDED.month_limit ELSE hostel_budget_tracking.month_limit END,
+                            sanctioned_amount = CASE WHEN EXCLUDED.sanctioned_amount IS NOT NULL AND EXCLUDED.sanctioned_amount >= 0 THEN EXCLUDED.sanctioned_amount ELSE hostel_budget_tracking.sanctioned_amount END,
+                            month_limit = CASE WHEN EXCLUDED.month_limit IS NOT NULL AND EXCLUDED.month_limit >= 0 THEN EXCLUDED.month_limit ELSE hostel_budget_tracking.month_limit END,
                             oct_26_actual = CASE WHEN EXCLUDED.oct_26_actual IS NOT NULL THEN EXCLUDED.oct_26_actual ELSE hostel_budget_tracking.oct_26_actual END,
                             nov_26_actual = CASE WHEN EXCLUDED.nov_26_actual IS NOT NULL THEN EXCLUDED.nov_26_actual ELSE hostel_budget_tracking.nov_26_actual END,
                             dec_26_actual = CASE WHEN EXCLUDED.dec_26_actual IS NOT NULL THEN EXCLUDED.dec_26_actual ELSE hostel_budget_tracking.dec_26_actual END,

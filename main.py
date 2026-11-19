@@ -1124,7 +1124,8 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
             "transport_census_by_branch": transport_census_by_branch if module == "transport" else None,
             "matrix_by_branch": matrix_by_branch if module == "transport" else None,
             "branches": ["all", "RPS", "KPM", "Common", "University"] if module == "transport" else None,
-            "active_branch": branch or "all"
+            "active_branch": branch or "all",
+            "module": module
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

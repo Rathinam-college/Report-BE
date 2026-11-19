@@ -2379,7 +2379,8 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
 
     q_rec = int(_clean_num(hc.get("quality_issues_received"), 0))
     q_cls = int(_clean_num(hc.get("quality_issues_closed"), 0))
-    q_open = max(0, q_rec - q_cls)
+    q_opn = max(0, q_rec - q_cls)
+    q_open = q_opn
 
     incidents = int(_clean_num(hc.get("incidents_count"), 0))
 
@@ -2818,7 +2819,8 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
 
     q_rec = int(_clean_num(hc.get("quality_issues_received"), 0))
     q_cls = int(_clean_num(hc.get("quality_issues_closed"), 0))
-    q_open = max(0, q_rec - q_cls)
+    q_opn = max(0, q_rec - q_cls)
+    q_open = q_opn
 
     incidents = int(_clean_num(hc.get("incidents_count"), 0))
 

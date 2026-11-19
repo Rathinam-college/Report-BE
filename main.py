@@ -1,4 +1,9 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Response, Request
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Response, Request
+from starlette.staticfiles import StaticFiles
+import os
+import uuid
+import mimetypes
+import shutil
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any, Union
@@ -27,6 +32,11 @@ app.add_middleware(
 )
 
 # Subpath rewrite middleware: seamlessly supports deployment under rguedu.in/Report/api
+# Mount uploads static directory for monthly documents and bills
+uploads_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+os.makedirs(uploads_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+
 @app.middleware("http")
 async def rewrite_report_subpath(request: Request, call_next):
     path = request.scope.get("path", "")
@@ -34,6 +44,10 @@ async def rewrite_report_subpath(request: Request, call_next):
         request.scope["path"] = path.replace("/Report/api", "/api", 1)
     elif path.startswith("/report/api"):
         request.scope["path"] = path.replace("/report/api", "/api", 1)
+    elif path.startswith("/Report/uploads"):
+        request.scope["path"] = path.replace("/Report/uploads", "/uploads", 1)
+    elif path.startswith("/report/uploads"):
+        request.scope["path"] = path.replace("/report/uploads", "/uploads", 1)
     return await call_next(request)
 
 def ensure_schema_compatibility():
@@ -42,6 +56,23 @@ def ensure_schema_compatibility():
     even if full migrations previously stopped or encountered non-critical errors.
     """
     stmts = [
+        """
+        CREATE TABLE IF NOT EXISTS monthly_attachments (
+            id SERIAL PRIMARY KEY,
+            module VARCHAR(50) NOT NULL,
+            period_id INT NOT NULL REFERENCES billing_periods(id) ON DELETE CASCADE,
+            branch VARCHAR(50) DEFAULT 'Common',
+            file_name VARCHAR(255) NOT NULL,
+            file_type VARCHAR(50) NOT NULL,
+            file_path TEXT NOT NULL,
+            file_size BIGINT DEFAULT 0,
+            mime_type VARCHAR(100) DEFAULT '',
+            is_link BOOLEAN NOT NULL DEFAULT FALSE,
+            uploaded_by VARCHAR(100) DEFAULT 'User',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_monthly_attachments_module_period ON monthly_attachments(module, period_id);
+        """,
         "ALTER TABLE monthly_expense_entries ADD COLUMN IF NOT EXISTS branch VARCHAR(50) NOT NULL DEFAULT 'Common';",
         "CREATE INDEX IF NOT EXISTS idx_monthly_expense_entries_branch ON monthly_expense_entries(branch);",
         "ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS branch VARCHAR(50) NOT NULL DEFAULT 'Common';",
@@ -3996,3 +4027,290 @@ def reseed_database_demo_data():
         return res
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to re-seed data: {str(e)}")
+
+
+# =========================================================================
+# MONTHLY ATTACHMENTS & SUPPORTING DOCUMENTS MANAGEMENT (IMAGE, PDF, PPT, EXCEL, LINKS)
+# =========================================================================
+
+def _detect_file_type(filename: str, is_link: bool = False, url: str = "") -> str:
+    if is_link:
+        u = (url or filename).lower()
+        if "sheet" in u or "excel" in u or ".csv" in u:
+            return "excel"
+        if "slide" in u or "presentation" in u or "ppt" in u:
+            return "ppt"
+        if "doc" in u or "word" in u:
+            return "doc"
+        if "drive.google.com" in u or "onedrive" in u or "dropbox" in u:
+            return "cloud_drive"
+        return "link"
+    
+    fn = filename.lower()
+    if any(fn.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp"]):
+        return "image"
+    if fn.endswith(".pdf"):
+        return "pdf"
+    if any(fn.endswith(ext) for ext in [".ppt", ".pptx"]):
+        return "ppt"
+    if any(fn.endswith(ext) for ext in [".xls", ".xlsx", ".csv"]):
+        return "excel"
+    if any(fn.endswith(ext) for ext in [".doc", ".docx", ".txt", ".rtf"]):
+        return "doc"
+    return "other"
+
+
+@app.get("/api/attachments")
+def get_monthly_attachments(module: str = "food", period_id: Optional[int] = None, branch: Optional[str] = None):
+    """
+    Fetches attachments for a given module and period.
+    Also returns a summary map of attachment counts per period.
+    """
+    try:
+        where_clauses = ["module = %s"]
+        params = [module]
+
+        if period_id is not None:
+            where_clauses.append("period_id = %s")
+            params.append(period_id)
+
+        if branch and branch != "all":
+            where_clauses.append("(branch = %s OR branch = 'Common' OR branch IS NULL)")
+            params.append(branch)
+
+        sql = f"""
+            SELECT id, module, period_id, branch, file_name, file_type, file_path, file_size, mime_type, is_link, uploaded_by, created_at
+            FROM monthly_attachments
+            WHERE {' AND '.join(where_clauses)}
+            ORDER BY created_at DESC;
+        """
+        rows = db.execute_query(sql, tuple(params))
+        attachments = []
+        for r in rows:
+            attachments.append({
+                "id": r["id"],
+                "module": r["module"],
+                "period_id": r["period_id"],
+                "branch": r.get("branch") or "Common",
+                "file_name": r["file_name"],
+                "file_type": r["file_type"],
+                "file_path": r["file_path"],
+                "file_size": int(r.get("file_size") or 0),
+                "mime_type": r.get("mime_type") or "",
+                "is_link": bool(r.get("is_link")),
+                "uploaded_by": r.get("uploaded_by") or "User",
+                "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"])
+            })
+
+        summary_rows = db.execute_query("""
+            SELECT period_id, COUNT(*) AS count
+            FROM monthly_attachments
+            WHERE module = %s
+            GROUP BY period_id;
+        """, (module,))
+        summary = {str(sr["period_id"]): int(sr["count"]) for sr in summary_rows}
+
+        return {
+            "status": "success",
+            "module": module,
+            "period_id": period_id,
+            "total_count": len(attachments),
+            "summary": summary,
+            "attachments": attachments
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch attachments: {str(e)}")
+
+
+@app.get("/api/attachments/summary")
+def get_monthly_attachments_summary(module: str = "food"):
+    """
+    Returns attachment counts per period for a given module so the Dashboard and Data Entry can show badges.
+    """
+    try:
+        rows = db.execute_query("""
+            SELECT period_id, COUNT(*) AS count
+            FROM monthly_attachments
+            WHERE module = %s
+            GROUP BY period_id;
+        """, (module,))
+        summary = {str(r["period_id"]): int(r["count"]) for r in rows}
+        return {"status": "success", "module": module, "summary": summary}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/attachments/upload")
+async def upload_monthly_attachments(
+    files: List[UploadFile] = File(...),
+    module: str = Form(...),
+    period_id: int = Form(...),
+    branch: Optional[str] = Form("Common"),
+    uploaded_by: Optional[str] = Form("User")
+):
+    """
+    Uploads one or more files (image, pdf, ppt, excel, doc) for a specific monthly entry.
+    Saves files to backend/uploads and records them in PostgreSQL monthly_attachments.
+    """
+    try:
+        up_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+        os.makedirs(up_dir, exist_ok=True)
+
+        created_records = []
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                for file in files:
+                    orig_name = file.filename or "attachment"
+                    safe_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', orig_name)
+                    unique_id = uuid.uuid4().hex[:10]
+                    saved_filename = f"{unique_id}_{safe_name}"
+                    file_dest_path = os.path.join(up_dir, saved_filename)
+
+                    content = await file.read()
+                    file_size = len(content)
+                    with open(file_dest_path, "wb") as f_out:
+                        f_out.write(content)
+
+                    mime_type = file.content_type or mimetypes.guess_type(orig_name)[0] or "application/octet-stream"
+                    file_type = _detect_file_type(orig_name, is_link=False)
+                    relative_url = f"/uploads/{saved_filename}"
+
+                    cur.execute("""
+                        INSERT INTO monthly_attachments (module, period_id, branch, file_name, file_type, file_path, file_size, mime_type, is_link, uploaded_by)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, false, %s)
+                        RETURNING id, created_at;
+                    """, (module, period_id, branch or "Common", orig_name, file_type, relative_url, file_size, mime_type, uploaded_by or "User"))
+                    inserted = cur.fetchone()
+                    conn.commit()
+
+                    created_records.append({
+                        "id": inserted[0],
+                        "module": module,
+                        "period_id": period_id,
+                        "branch": branch or "Common",
+                        "file_name": orig_name,
+                        "file_type": file_type,
+                        "file_path": relative_url,
+                        "file_size": file_size,
+                        "mime_type": mime_type,
+                        "is_link": False,
+                        "uploaded_by": uploaded_by or "User",
+                        "created_at": inserted[1].isoformat() if hasattr(inserted[1], "isoformat") else str(inserted[1])
+                    })
+            return {
+                "status": "success",
+                "message": f"Successfully uploaded {len(created_records)} file(s)",
+                "attachments": created_records
+            }
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+
+class AttachmentLinkRequest(BaseModel):
+    module: str
+    period_id: int
+    branch: Optional[str] = "Common"
+    url: str
+    title: str
+    uploaded_by: Optional[str] = "User"
+
+
+@app.post("/api/attachments/link")
+def add_attachment_link(req: AttachmentLinkRequest):
+    """
+    Attaches an external web link or cloud document (Google Drive, OneDrive, Sheet, etc.) to the monthly entry.
+    """
+    try:
+        url = req.url.strip()
+        if not url:
+            raise HTTPException(status_code=400, detail="URL cannot be empty")
+        if not (url.startswith("http://") or url.startswith("https://")):
+            url = "https://" + url
+
+        title = req.title.strip() if req.title and req.title.strip() else url
+        file_type = _detect_file_type(title, is_link=True, url=url)
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO monthly_attachments (module, period_id, branch, file_name, file_type, file_path, file_size, mime_type, is_link, uploaded_by)
+                    VALUES (%s, %s, %s, %s, %s, %s, 0, 'text/uri-list', true, %s)
+                    RETURNING id, created_at;
+                """, (req.module, req.period_id, req.branch or "Common", title, file_type, url, req.uploaded_by or "User"))
+                row = cur.fetchone()
+                conn.commit()
+
+                return {
+                    "status": "success",
+                    "message": "Link attached successfully",
+                    "attachment": {
+                        "id": row[0],
+                        "module": req.module,
+                        "period_id": req.period_id,
+                        "branch": req.branch or "Common",
+                        "file_name": title,
+                        "file_type": file_type,
+                        "file_path": url,
+                        "file_size": 0,
+                        "mime_type": "text/uri-list",
+                        "is_link": True,
+                        "uploaded_by": req.uploaded_by or "User",
+                        "created_at": row[1].isoformat() if hasattr(row[1], "isoformat") else str(row[1])
+                    }
+                }
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            db.release_db_connection(conn)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add link: {str(e)}")
+
+
+@app.delete("/api/attachments/{attachment_id}")
+def delete_attachment(attachment_id: int):
+    """
+    Deletes an attachment from database and physically removes the file from disk if it was an upload.
+    """
+    try:
+        row = db.execute_query(
+            "SELECT id, file_path, is_link FROM monthly_attachments WHERE id = %s;",
+            (attachment_id,),
+            fetch_all=False
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+
+        if not row.get("is_link"):
+            file_path = row.get("file_path", "")
+            if file_path.startswith("/uploads/"):
+                saved_filename = file_path.replace("/uploads/", "")
+                up_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+                local_file = os.path.join(up_dir, saved_filename)
+                if os.path.exists(local_file):
+                    try:
+                        os.remove(local_file)
+                    except Exception as fe:
+                        print(f"[Attachment Delete Notice] Could not remove physical file {local_file}: {fe}")
+
+        db.execute_commit("DELETE FROM monthly_attachments WHERE id = %s;", (attachment_id,))
+        return {"status": "success", "message": "Attachment deleted successfully", "deleted_id": attachment_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete attachment: {str(e)}")

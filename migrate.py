@@ -403,6 +403,26 @@ MIGRATION_STEPS = [
             PRIMARY KEY (module, param_key)
         );
         """
+    ),
+    (
+        "Monthly Attachments Table",
+        """
+        CREATE TABLE IF NOT EXISTS monthly_attachments (
+            id SERIAL PRIMARY KEY,
+            module VARCHAR(50) NOT NULL,
+            period_id INT NOT NULL REFERENCES billing_periods(id) ON DELETE CASCADE,
+            branch VARCHAR(50) DEFAULT 'Common',
+            file_name VARCHAR(255) NOT NULL,
+            file_type VARCHAR(50) NOT NULL,
+            file_path TEXT NOT NULL,
+            file_size BIGINT DEFAULT 0,
+            mime_type VARCHAR(100) DEFAULT '',
+            is_link BOOLEAN NOT NULL DEFAULT FALSE,
+            uploaded_by VARCHAR(100) DEFAULT 'User',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_monthly_attachments_module_period ON monthly_attachments(module, period_id);
+        """
     )
 ]
 

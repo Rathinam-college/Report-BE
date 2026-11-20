@@ -423,6 +423,35 @@ MIGRATION_STEPS = [
         );
         CREATE INDEX IF NOT EXISTS idx_monthly_attachments_module_period ON monthly_attachments(module, period_id);
         """
+    ),
+    (
+        "Transport Vehicle Entries & Fleet Mileage Ledger Table",
+        """
+        CREATE TABLE IF NOT EXISTS transport_vehicle_entries (
+            id SERIAL PRIMARY KEY,
+            period_id INT NOT NULL REFERENCES billing_periods(id) ON DELETE CASCADE,
+            branch VARCHAR(50) NOT NULL DEFAULT 'Common',
+            vehicle_no VARCHAR(100) NOT NULL,
+            make VARCHAR(150),
+            model VARCHAR(100),
+            fuel_expenses NUMERIC(15, 2) DEFAULT 0.0,
+            fc_cost NUMERIC(15, 2) DEFAULT 0.0,
+            statutory_cost NUMERIC(15, 2) DEFAULT 0.0,
+            repair_maintenance NUMERIC(15, 2) DEFAULT 0.0,
+            parking_fastag NUMERIC(15, 2) DEFAULT 0.0,
+            employee_cost NUMERIC(15, 2) DEFAULT 0.0,
+            other_cost NUMERIC(15, 2) DEFAULT 0.0,
+            total_expenses NUMERIC(15, 2) DEFAULT 0.0,
+            diesel_litres NUMERIC(15, 2) DEFAULT 0.0,
+            km_run NUMERIC(15, 2) DEFAULT 0.0,
+            mileage NUMERIC(10, 2) DEFAULT 0.0,
+            display_order INT DEFAULT 0,
+            remarks TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_transport_vehicle_entries_period_branch ON transport_vehicle_entries(period_id, branch);
+        """
     )
 ]
 
@@ -472,6 +501,13 @@ def run_migrations():
         print("  [OK] Hostel Master Parameters Seeded & Verified")
     except Exception as he:
         print(f"  [WARNING] Hostel Master Parameters Seeding skipped: {he}")
+
+    try:
+        import seed_transport_vehicles
+        seed_transport_vehicles.ensure_and_seed_transport_vehicles()
+        print("  [OK] Transport Vehicle Fleet Entries Seeded & Verified")
+    except Exception as tve:
+        print(f"  [WARNING] Transport Vehicle Seeding skipped: {tve}")
 
     # Notice: Do not automatically re-seed operational/census data on startup.
     # Operational data must only be populated when user enters and saves via Data Entry.

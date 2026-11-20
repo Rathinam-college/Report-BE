@@ -497,3 +497,42 @@ INSERT INTO monthly_expense_entries (period_id, cost_head_id, amount, remarks) V
 -- SELECT * FROM vw_food_executive_summary;
 -- SELECT * FROM vw_food_monthly_matrix;
 
+
+
+-- ------------------------------------------------------------
+-- 9. HOSTEL BUDGET TRACKING SUMMARY (9 OFFICIAL BUDGET HEADS)
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS hostel_budget_tracking (
+    id SERIAL PRIMARY KEY,
+    s_no INT NOT NULL,
+    budget_head VARCHAR(100) UNIQUE NOT NULL,
+    sanctioned_amount NUMERIC(14,2) DEFAULT 0.0,
+    month_limit NUMERIC(14,2) DEFAULT 0.0,
+    sep_25_actual NUMERIC(14,2) DEFAULT 0.0,
+    oct_26_actual NUMERIC(14,2) DEFAULT 0.0,
+    nov_26_actual NUMERIC(14,2) DEFAULT 0.0,
+    dec_26_actual NUMERIC(14,2) DEFAULT 0.0,
+    jan_27_actual NUMERIC(14,2) DEFAULT 0.0,
+    feb_27_actual NUMERIC(14,2) DEFAULT 0.0,
+    mar_27_actual NUMERIC(14,2) DEFAULT 0.0,
+    apr_27_actual NUMERIC(14,2) DEFAULT 0.0,
+    may_27_actual NUMERIC(14,2) DEFAULT 0.0,
+    jun_27_actual NUMERIC(14,2) DEFAULT 0.0,
+    jul_27_actual NUMERIC(14,2) DEFAULT 0.0,
+    aug_27_actual NUMERIC(14,2) DEFAULT 0.0,
+    sep_27_actual NUMERIC(14,2) DEFAULT 0.0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO hostel_budget_tracking (s_no, budget_head, sanctioned_amount, month_limit)
+VALUES 
+    (1, 'Rent', 68004408, 8500551),
+    (2, 'Printing & Stationary Expenses', 15000, 1875),
+    (3, 'Rates & Taxes', 291974, 36497),
+    (4, 'Employee Cost', 14808000, 1851000),
+    (5, 'Hostel Management Services', 18722671, 2340334),
+    (6, 'Utility', 23488736, 2936092),
+    (7, 'Laundry Expenses', 8680000, 1085000),
+    (8, 'Repairs and Maintenance', 4000000, 500000),
+    (9, 'Events', 4000000, 500000)
+ON CONFLICT (budget_head) DO NOTHING;

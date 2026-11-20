@@ -638,6 +638,22 @@ def update_hostel_budget_tracking(req: Dict[str, Any]):
                         ON CONFLICT (budget_head) DO UPDATE SET
                             {update_clause};
                     """, tuple(vals))
+
+                # Synchronize period 30 (Oct) actual spend and balance in hostel_census_entries
+                try:
+                    cur.execute("SELECT SUM(oct_26_actual) FROM hostel_budget_tracking")
+                    tot_oct_sum = float(cur.fetchone()[0] or 0.0)
+                    if tot_oct_sum > 0.0:
+                        cur.execute("""
+                            UPDATE hostel_census_entries 
+                            SET expenses_occurred = %s,
+                                cumulative_budget_spent = %s,
+                                balance = COALESCE(approved_budget, 142010789.0) - %s
+                            WHERE period_id IN (30, 246)
+                        """, (tot_oct_sum, tot_oct_sum, tot_oct_sum))
+                except Exception as sync_err:
+                    print(f"[Hostel Census Sync Notice] {sync_err}")
+
                 conn.commit()
                 return {"status": "success", "message": "Hostel budget tracking updated successfully"}
         except Exception:
@@ -1088,6 +1104,17 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
                     for ck, cv in c_metrics.items():
                         if ck not in h_dict:
                             h_dict[ck] = cv
+
+                # Ensure budget, cumulative spent, and remaining balance are always strictly synchronized
+                exp_occ = float(h_dict.get("expenses_occurred") or 0.0)
+                app_bud = float(h_dict.get("approved_budget") or 142010789.0)
+                cum_sp = float(h_dict.get("cumulative_budget_spent") or 0.0)
+                if cum_sp < exp_occ and exp_occ > 0.0:
+                    cum_sp = exp_occ
+                    h_dict["cumulative_budget_spent"] = cum_sp
+                h_dict["approved_budget"] = app_bud
+                h_dict["balance"] = round(app_bud - cum_sp, 2)
+
                 hostel_census_data[str(hr["period_id"])] = h_dict
 
             if module in ('hostel', 'all', None):

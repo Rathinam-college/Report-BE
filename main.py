@@ -112,14 +112,14 @@ def ensure_schema_compatibility():
         """
         INSERT INTO hostel_budget_tracking (s_no, budget_head, sanctioned_amount, month_limit)
         VALUES 
-            (1, 'Rent', 68004408, 8500551),
+            (1, 'Rent', 84762516, 10595314.5),
             (2, 'Printing & Stationary Expenses', 15000, 1875),
-            (3, 'Rates & Taxes', 291974, 36497),
-            (4, 'Employee Cost', 14808000, 1851000),
-            (5, 'Hostel Management Services', 18722671, 2340334),
-            (6, 'Utility', 23488736, 2936092),
-            (7, 'Laundry Expenses', 8680000, 1085000),
-            (8, 'Repairs and Maintenance', 4000000, 500000),
+            (3, 'Rates & Taxes', 731612, 91451.5),
+            (4, 'Employee Cost', 15402907, 1925363.38),
+            (5, 'Hostel Management Services', 30490064, 3811258),
+            (6, 'Utility', 32893042, 4111630.25),
+            (7, 'Laundry Expenses', 11728517, 1466064.63),
+            (8, 'Repairs and Maintenance', 5425960, 678245),
             (9, 'Events', 4000000, 500000)
         ON CONFLICT (budget_head) DO NOTHING;
         """,
@@ -1107,7 +1107,7 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
 
                 # Ensure budget, cumulative spent, and remaining balance are always strictly synchronized
                 exp_occ = float(h_dict.get("expenses_occurred") or 0.0)
-                app_bud = float(h_dict.get("approved_budget") or 142010789.0)
+                app_bud = float(h_dict.get("approved_budget") or 185449618.0)
                 cum_sp = float(h_dict.get("cumulative_budget_spent") or 0.0)
                 if cum_sp < exp_occ and exp_occ > 0.0:
                     cum_sp = exp_occ
@@ -1125,6 +1125,12 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
                             k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
                             for k, v in hbr.items()
                         })
+                    tot_sanctioned_sum = sum(float(r.get("sanctioned_amount") or 0.0) for r in hostel_budget_tracking_data)
+                    if tot_sanctioned_sum > 0:
+                        for p_str, hc_row in hostel_census_data.items():
+                            hc_row["approved_budget"] = tot_sanctioned_sum
+                            c_spent = float(hc_row.get("cumulative_budget_spent") or hc_row.get("expenses_occurred") or 0.0)
+                            hc_row["balance"] = round(tot_sanctioned_sum - c_spent, 2)
                 except Exception as b_err:
                     print(f"[Hostel Budget Query Notice] {b_err}")
         except Exception as he:
@@ -3574,14 +3580,14 @@ def get_hostel_budget_tracking():
         "sep_27_actual"
     ]
     canonical_heads = [
-        {"s_no": 1, "budget_head": "Rent", "sanctioned_amount": 68004408.0, "month_limit": 8500551.0, "oct_26_actual": 8725551.0},
+        {"s_no": 1, "budget_head": "Rent", "sanctioned_amount": 84762516.0, "month_limit": 10595314.5, "oct_26_actual": 8725551.0},
         {"s_no": 2, "budget_head": "Printing & Stationary Expenses", "sanctioned_amount": 15000.0, "month_limit": 1875.0, "oct_26_actual": 0.0},
-        {"s_no": 3, "budget_head": "Rates & Taxes", "sanctioned_amount": 291974.0, "month_limit": 36497.0, "oct_26_actual": 0.0},
-        {"s_no": 4, "budget_head": "Employee Cost", "sanctioned_amount": 14808000.0, "month_limit": 1851000.0, "oct_26_actual": 846146.0},
-        {"s_no": 5, "budget_head": "Hostel Management Services", "sanctioned_amount": 18722671.0, "month_limit": 2340334.0, "oct_26_actual": 2281856.0},
-        {"s_no": 6, "budget_head": "Utility", "sanctioned_amount": 23488736.0, "month_limit": 2936092.0, "oct_26_actual": 9424.0},
-        {"s_no": 7, "budget_head": "Laundry Expenses", "sanctioned_amount": 8680000.0, "month_limit": 1085000.0, "oct_26_actual": 1075076.0},
-        {"s_no": 8, "budget_head": "Repairs and Maintenance", "sanctioned_amount": 4000000.0, "month_limit": 500000.0, "oct_26_actual": 463064.0},
+        {"s_no": 3, "budget_head": "Rates & Taxes", "sanctioned_amount": 731612.0, "month_limit": 91451.5, "oct_26_actual": 0.0},
+        {"s_no": 4, "budget_head": "Employee Cost", "sanctioned_amount": 15402907.0, "month_limit": 1925363.38, "oct_26_actual": 846146.0},
+        {"s_no": 5, "budget_head": "Hostel Management Services", "sanctioned_amount": 30490064.0, "month_limit": 3811258.0, "oct_26_actual": 2281856.0},
+        {"s_no": 6, "budget_head": "Utility", "sanctioned_amount": 32893042.0, "month_limit": 4111630.25, "oct_26_actual": 9424.0},
+        {"s_no": 7, "budget_head": "Laundry Expenses", "sanctioned_amount": 11728517.0, "month_limit": 1466064.63, "oct_26_actual": 1075076.0},
+        {"s_no": 8, "budget_head": "Repairs and Maintenance", "sanctioned_amount": 5425960.0, "month_limit": 678245.0, "oct_26_actual": 485064.0},
         {"s_no": 9, "budget_head": "Events", "sanctioned_amount": 4000000.0, "month_limit": 500000.0, "oct_26_actual": 0.0}
     ]
     try:
@@ -3634,10 +3640,10 @@ def get_hostel_budget_tracking():
         return {
             "status": "success",
             "items": fallback_data,
-            "total_sanctioned": 142010789.0,
-            "total_month_limit": 17751349.0,
-            "monthly_totals": {"oct_26_actual": 13401117.0},
-            "total_oct_26_actual": 13401117.0,
+            "total_sanctioned": 185449618.0,
+            "total_month_limit": 23181202.0,
+            "monthly_totals": {"oct_26_actual": 13423117.0},
+            "total_oct_26_actual": 13423117.0,
             "total_nov_26_actual": 0.0
         }
 

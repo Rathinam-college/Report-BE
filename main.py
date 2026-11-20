@@ -162,6 +162,32 @@ def ensure_schema_compatibility():
             is_active BOOLEAN NOT NULL DEFAULT TRUE,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS transport_vehicle_entries (
+            id SERIAL PRIMARY KEY,
+            period_id INT NOT NULL REFERENCES billing_periods(id) ON DELETE CASCADE,
+            branch VARCHAR(50) NOT NULL DEFAULT 'Common',
+            vehicle_no VARCHAR(50) NOT NULL,
+            make VARCHAR(100) DEFAULT '',
+            model VARCHAR(100) DEFAULT '',
+            fuel_expenses NUMERIC(12,2) DEFAULT 0.0,
+            fc_cost NUMERIC(12,2) DEFAULT 0.0,
+            statutory_cost NUMERIC(12,2) DEFAULT 0.0,
+            repair_maintenance NUMERIC(12,2) DEFAULT 0.0,
+            parking_fastag NUMERIC(12,2) DEFAULT 0.0,
+            employee_cost NUMERIC(12,2) DEFAULT 0.0,
+            other_cost NUMERIC(12,2) DEFAULT 0.0,
+            total_expenses NUMERIC(12,2) DEFAULT 0.0,
+            diesel_litres NUMERIC(10,2) DEFAULT 0.0,
+            km_run NUMERIC(10,2) DEFAULT 0.0,
+            mileage NUMERIC(10,2) DEFAULT 0.0,
+            display_order INT DEFAULT 0,
+            remarks TEXT DEFAULT '',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_trans_veh_period_branch ON transport_vehicle_entries(period_id, branch);
         """
     ]
     for stmt in stmts:
@@ -3774,6 +3800,350 @@ def save_transport_census_bulk(req: Dict[str, Any]):
             raise
         finally:
             db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------------
+# TRANSPORT VEHICLE-WISE FLEET EXPENSES & MILEAGE LEDGER API
+# -------------------------------------------------------------
+
+@app.get("/api/transport/vehicles")
+def get_transport_vehicles(period_id: Optional[int] = None, branch: Optional[str] = "Common"):
+    """
+    Returns vehicle-wise fleet expense records, diesel consumption, KM run, and mileage
+    for a given transport billing period and branch (or all branches consolidated).
+    """
+    try:
+        # If period_id not provided, find the latest transport billing period
+        if not period_id:
+            latest_p = db.execute_query(
+                "SELECT id FROM billing_periods WHERE module = 'transport' ORDER BY start_date DESC LIMIT 1;",
+                fetch_all=False
+            )
+            if latest_p:
+                period_id = latest_p["id"]
+            else:
+                return {"status": "success", "vehicles": [], "summary": {}, "branch_summaries": {}}
+
+        b_filter = (branch or "Common").strip()
+        
+        if b_filter == "all":
+            rows = db.execute_query(
+                """
+                SELECT id, period_id, branch, vehicle_no, make, model, 
+                       fuel_expenses, fc_cost, statutory_cost, repair_maintenance, 
+                       parking_fastag, employee_cost, other_cost, total_expenses, 
+                       diesel_litres, km_run, mileage, display_order, remarks, created_at
+                FROM transport_vehicle_entries
+                WHERE period_id = %s
+                ORDER BY branch, display_order, id;
+                """,
+                (period_id,)
+            )
+        else:
+            rows = db.execute_query(
+                """
+                SELECT id, period_id, branch, vehicle_no, make, model, 
+                       fuel_expenses, fc_cost, statutory_cost, repair_maintenance, 
+                       parking_fastag, employee_cost, other_cost, total_expenses, 
+                       diesel_litres, km_run, mileage, display_order, remarks, created_at
+                FROM transport_vehicle_entries
+                WHERE period_id = %s AND branch = %s
+                ORDER BY display_order, id;
+                """,
+                (period_id, b_filter)
+            )
+
+        clean_rows = []
+        for r in rows:
+            clean_item = {}
+            for k, v in r.items():
+                if isinstance(v, Decimal):
+                    clean_item[k] = float(v)
+                elif isinstance(v, datetime):
+                    clean_item[k] = v.isoformat()
+                else:
+                    clean_item[k] = v
+            clean_rows.append(clean_item)
+
+        # Compute summary for currently active view
+        tot_fuel = sum(r.get("fuel_expenses", 0) for r in clean_rows)
+        tot_fc = sum(r.get("fc_cost", 0) for r in clean_rows)
+        tot_stat = sum(r.get("statutory_cost", 0) for r in clean_rows)
+        tot_rep = sum(r.get("repair_maintenance", 0) for r in clean_rows)
+        tot_park = sum(r.get("parking_fastag", 0) for r in clean_rows)
+        tot_emp = sum(r.get("employee_cost", 0) for r in clean_rows)
+        tot_oth = sum(r.get("other_cost", 0) for r in clean_rows)
+        tot_exp = sum(r.get("total_expenses", 0) for r in clean_rows)
+        tot_diesel = sum(r.get("diesel_litres", 0) for r in clean_rows)
+        tot_km = sum(r.get("km_run", 0) for r in clean_rows)
+        avg_mileage = round(tot_km / tot_diesel, 2) if tot_diesel > 0 else 0.0
+
+        summary = {
+            "bus_count": len(clean_rows),
+            "fuel_expenses": tot_fuel,
+            "fc_cost": tot_fc,
+            "statutory_cost": tot_stat,
+            "repair_maintenance": tot_rep,
+            "parking_fastag": tot_park,
+            "employee_cost": tot_emp,
+            "other_cost": tot_oth,
+            "total_expenses": tot_exp,
+            "diesel_litres": tot_diesel,
+            "km_run": tot_km,
+            "mileage": avg_mileage
+        }
+
+        # Branch summaries for badges
+        all_period_rows = db.execute_query(
+            "SELECT branch, vehicle_no, total_expenses, diesel_litres, km_run FROM transport_vehicle_entries WHERE period_id = %s;",
+            (period_id,)
+        )
+        branches = ["Common", "RPS", "KPM", "University"]
+        branch_summaries = {}
+        all_count = len(all_period_rows)
+        all_exp = sum(float(r["total_expenses"] or 0) for r in all_period_rows)
+        all_diesel = sum(float(r["diesel_litres"] or 0) for r in all_period_rows)
+        all_km = sum(float(r["km_run"] or 0) for r in all_period_rows)
+        branch_summaries["all"] = {
+            "bus_count": all_count,
+            "total_expenses": all_exp,
+            "diesel_litres": all_diesel,
+            "km_run": all_km,
+            "mileage": round(all_km / all_diesel, 2) if all_diesel > 0 else 0.0
+        }
+
+        for b in branches:
+            b_rows = [r for r in all_period_rows if r.get("branch") == b]
+            b_cnt = len(b_rows)
+            b_e = sum(float(r["total_expenses"] or 0) for r in b_rows)
+            b_d = sum(float(r["diesel_litres"] or 0) for r in b_rows)
+            b_k = sum(float(r["km_run"] or 0) for r in b_rows)
+            branch_summaries[b] = {
+                "bus_count": b_cnt,
+                "total_expenses": b_e,
+                "diesel_litres": b_d,
+                "km_run": b_k,
+                "mileage": round(b_k / b_d, 2) if b_d > 0 else 0.0
+            }
+
+        return {
+            "status": "success",
+            "period_id": period_id,
+            "branch": b_filter,
+            "vehicles": clean_rows,
+            "summary": summary,
+            "branch_summaries": branch_summaries
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/transport/vehicles")
+def save_transport_vehicles(req: Dict[str, Any]):
+    """
+    Saves/updates vehicle ledger rows for a specific branch and period,
+    auto-calculates row totals and mileage, and syncs aggregate totals to transport_census_entries.
+    """
+    try:
+        period_id = int(req.get("period_id"))
+        branch = (req.get("branch") or "Common").strip()
+        vehicles = req.get("vehicles") or []
+
+        if branch == "all":
+            raise HTTPException(status_code=400, detail="Cannot save vehicles under 'all' consolidated view. Select a specific branch (RPS, KPM, University, or Common).")
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                # 1. Remove previous entries for this period and branch
+                cur.execute(
+                    "DELETE FROM transport_vehicle_entries WHERE period_id = %s AND branch = %s;",
+                    (period_id, branch)
+                )
+
+                tot_fuel = 0.0
+                tot_fc = 0.0
+                tot_stat = 0.0
+                tot_rep = 0.0
+                tot_park = 0.0
+                tot_emp = 0.0
+                tot_oth = 0.0
+                tot_diesel = 0.0
+                tot_km = 0.0
+
+                ins_sql = """
+                INSERT INTO transport_vehicle_entries (
+                    period_id, branch, vehicle_no, make, model, 
+                    fuel_expenses, fc_cost, statutory_cost, repair_maintenance, 
+                    parking_fastag, employee_cost, other_cost, total_expenses, 
+                    diesel_litres, km_run, mileage, display_order, remarks
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id;
+                """
+
+                saved_ids = []
+                for order, v in enumerate(vehicles):
+                    v_no = str(v.get("vehicle_no") or "").strip()
+                    if not v_no:
+                        v_no = f"BUS-{order + 1:02d}"
+                    make = str(v.get("make") or "").strip()
+                    model = str(v.get("model") or "").strip()
+                    remarks = str(v.get("remarks") or "").strip()
+
+                    fuel = float(_clean_num(v.get("fuel_expenses", 0)))
+                    fc = float(_clean_num(v.get("fc_cost", 0)))
+                    stat = float(_clean_num(v.get("statutory_cost", 0)))
+                    rep = float(_clean_num(v.get("repair_maintenance", 0)))
+                    park = float(_clean_num(v.get("parking_fastag", 0)))
+                    emp = float(_clean_num(v.get("employee_cost", 0)))
+                    oth = float(_clean_num(v.get("other_cost", 0)))
+                    diesel = float(_clean_num(v.get("diesel_litres", 0)))
+                    km = float(_clean_num(v.get("km_run", 0)))
+
+                    row_tot = fuel + fc + stat + rep + park + emp + oth
+                    row_mila = round(km / diesel, 2) if diesel > 0 else 0.0
+
+                    tot_fuel += fuel
+                    tot_fc += fc
+                    tot_stat += stat
+                    tot_rep += rep
+                    tot_park += park
+                    tot_emp += emp
+                    tot_oth += oth
+                    tot_diesel += diesel
+                    tot_km += km
+
+                    cur.execute(ins_sql, (
+                        period_id, branch, v_no, make, model,
+                        fuel, fc, stat, rep, park, emp, oth, row_tot,
+                        diesel, km, row_mila, order, remarks
+                    ))
+                    r_id = cur.fetchone()[0]
+                    saved_ids.append(r_id)
+
+                # 2. Sync to transport_census_entries
+                bus_count = len(vehicles)
+                tot_exp = tot_fuel + tot_fc + tot_stat + tot_rep + tot_park + tot_emp + tot_oth
+                census_update = {
+                    "vehicles_count": f"{bus_count} Buses" if bus_count > 0 else "0",
+                    "fuel_expenses": tot_fuel,
+                    "fc_cost": tot_fc,
+                    "statutory_cost": tot_stat,
+                    "repair_maintenance_cost": tot_rep,
+                    "employee_cost": tot_emp,
+                    "other_cost": tot_oth,
+                    "total_expenses": tot_exp,
+                    "diesel_litres": tot_diesel,
+                    "actual_kms": tot_km,
+                    "parking_fastag": tot_park
+                }
+                compute_and_upsert_transport_census(cur, period_id, census_update, branch=branch)
+
+                conn.commit()
+
+                return {
+                    "status": "success",
+                    "message": f"Saved {bus_count} vehicles for {branch} successfully",
+                    "period_id": period_id,
+                    "branch": branch,
+                    "bus_count": bus_count,
+                    "total_expenses": tot_exp,
+                    "diesel_litres": tot_diesel,
+                    "km_run": tot_km,
+                    "average_mileage": round(tot_km / tot_diesel, 2) if tot_diesel > 0 else 0.0
+                }
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/transport/vehicles/{vehicle_id}")
+def delete_transport_vehicle(vehicle_id: int):
+    """
+    Deletes a single vehicle record and updates transport census totals.
+    """
+    try:
+        veh = db.execute_query(
+            "SELECT period_id, branch, vehicle_no FROM transport_vehicle_entries WHERE id = %s;",
+            (vehicle_id,),
+            fetch_all=False
+        )
+        if not veh:
+            raise HTTPException(status_code=404, detail="Vehicle not found")
+
+        period_id = veh["period_id"]
+        branch = veh["branch"]
+
+        db.execute_commit("DELETE FROM transport_vehicle_entries WHERE id = %s;", (vehicle_id,))
+
+        # Recalculate remaining
+        remaining = db.execute_query(
+            """
+            SELECT count(*) as bus_count, 
+                   COALESCE(sum(fuel_expenses), 0) as fuel,
+                   COALESCE(sum(fc_cost), 0) as fc,
+                   COALESCE(sum(statutory_cost), 0) as stat,
+                   COALESCE(sum(repair_maintenance), 0) as rep,
+                   COALESCE(sum(parking_fastag), 0) as park,
+                   COALESCE(sum(employee_cost), 0) as emp,
+                   COALESCE(sum(other_cost), 0) as oth,
+                   COALESCE(sum(total_expenses), 0) as tot_exp,
+                   COALESCE(sum(diesel_litres), 0) as diesel,
+                   COALESCE(sum(km_run), 0) as km
+            FROM transport_vehicle_entries 
+            WHERE period_id = %s AND branch = %s;
+            """,
+            (period_id, branch),
+            fetch_all=False
+        )
+
+        b_cnt = int(remaining["bus_count"]) if remaining else 0
+        tot_f = float(remaining["fuel"]) if remaining else 0.0
+        tot_fc = float(remaining["fc"]) if remaining else 0.0
+        tot_st = float(remaining["stat"]) if remaining else 0.0
+        tot_rp = float(remaining["rep"]) if remaining else 0.0
+        tot_pk = float(remaining["park"]) if remaining else 0.0
+        tot_em = float(remaining["emp"]) if remaining else 0.0
+        tot_ot = float(remaining["oth"]) if remaining else 0.0
+        tot_ex = float(remaining["tot_exp"]) if remaining else 0.0
+        tot_dl = float(remaining["diesel"]) if remaining else 0.0
+        tot_km = float(remaining["km"]) if remaining else 0.0
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                census_update = {
+                    "vehicles_count": f"{b_cnt} Buses" if b_cnt > 0 else "0",
+                    "fuel_expenses": tot_f,
+                    "fc_cost": tot_fc,
+                    "statutory_cost": tot_st,
+                    "repair_maintenance_cost": tot_rp,
+                    "employee_cost": tot_em,
+                    "other_cost": tot_ot,
+                    "total_expenses": tot_ex,
+                    "diesel_litres": tot_dl,
+                    "actual_kms": tot_km,
+                    "parking_fastag": tot_pk
+                }
+                compute_and_upsert_transport_census(cur, period_id, census_update, branch=branch)
+                conn.commit()
+        finally:
+            db.release_db_connection(conn)
+
+        return {
+            "status": "success",
+            "message": f"Vehicle '{veh.get('vehicle_no')}' deleted successfully",
+            "remaining_bus_count": b_cnt
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

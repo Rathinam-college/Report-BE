@@ -283,6 +283,7 @@ class PeriodCreate(BaseModel):
     operating_days: Optional[int] = None
     module: Optional[str] = "food"
     clone_from_period_id: Optional[int] = None
+    branch: Optional[str] = "all"
 
 class PeriodUpdate(BaseModel):
     period_label: str
@@ -543,20 +544,140 @@ def create_period(req: PeriodCreate):
                 INSERT INTO transport_census_entries (
                     period_id, branch, vehicles_count, passengers_count, students_count, staff_count,
                     approved_kms, actual_kms, additional_kms, diesel_litres, fuel_expenses,
+                    fc_cost, statutory_cost, repair_maintenance_cost, employee_cost, other_cost, total_expenses,
+                    fee_demand, fee_collected, fee_unpaid, approved_budget, cumulative_budget_spent, balance,
                     service_tickets_raised, service_tickets_closed, service_tickets_open,
                     quality_issues_received, quality_issues_closed, quality_issues_open,
-                    statutory_compliance, incidents_count, approved_budget, cumulative_budget_spent
+                    statutory_compliance, incidents_count, custom_metrics
                 )
                 SELECT %s, COALESCE(branch, 'Common'), vehicles_count, passengers_count, students_count, staff_count,
                     approved_kms, actual_kms, additional_kms, diesel_litres, fuel_expenses,
+                    fc_cost, statutory_cost, repair_maintenance_cost, employee_cost, other_cost, total_expenses,
+                    fee_demand, fee_collected, fee_unpaid, approved_budget, cumulative_budget_spent, balance,
                     service_tickets_raised, service_tickets_closed, service_tickets_open,
                     quality_issues_received, quality_issues_closed, quality_issues_open,
-                    statutory_compliance, incidents_count, approved_budget, cumulative_budget_spent
+                    statutory_compliance, incidents_count, custom_metrics
                 FROM transport_census_entries WHERE period_id = %s
                 ON CONFLICT (period_id, branch) DO NOTHING;
                 """, (new_period["id"], req.clone_from_period_id))
 
-        return {"status": "success", "period": new_period}
+                db.execute_commit("""
+                INSERT INTO transport_vehicle_entries (
+                    period_id, branch, vehicle_no, make, model, display_order, remarks,
+                    fuel_expenses, fc_cost, statutory_cost, repair_maintenance, parking_fastag,
+                    employee_cost, other_cost, total_expenses, diesel_litres, km_run, mileage
+                )
+                SELECT %s, branch, vehicle_no, make, model, display_order, remarks,
+                    0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+                FROM transport_vehicle_entries WHERE period_id = %s
+                ON CONFLICT DO NOTHING;
+                """, (new_period["id"], req.clone_from_period_id))
+        elif mod == "transport":
+            # Distinct baseline initialization across all 4 branches when creating a new month
+            DISTINCT_TRANSPORT_BRANCH_DEFAULTS = {
+                "RPS": {
+                    "vehicles": "19", "passengers": 482, "students": 447, "staff": 35,
+                    "approved_kms": 33046.0, "actual_kms": 0.0, "additional_kms": 0.0,
+                    "diesel_litres": 0.0, "fuel_expense": 0.0,
+                    "repair_maint": 0.0, "employee_cost": 0.0, "other_ops": 0.0,
+                    "statutory_fc": 0.0, "insurance": 0.0,
+                    "budget_approved": 8500000.0, "budget_spent": 0.0,
+                    "fee_demand": 4200000.0, "fee_collected": 0.0,
+                    "tickets_raised": 0, "tickets_closed": 0, "incidents": 0
+                },
+                "KPM": {
+                    "vehicles": "5", "passengers": 270, "students": 250, "staff": 20,
+                    "approved_kms": 6006.0, "actual_kms": 0.0, "additional_kms": 0.0,
+                    "diesel_litres": 0.0, "fuel_expense": 0.0,
+                    "repair_maint": 0.0, "employee_cost": 0.0, "other_ops": 0.0,
+                    "statutory_fc": 0.0, "insurance": 0.0,
+                    "budget_approved": 6200000.0, "budget_spent": 0.0,
+                    "fee_demand": 2100000.0, "fee_collected": 0.0,
+                    "tickets_raised": 0, "tickets_closed": 0, "incidents": 0
+                },
+                "Common": {
+                    "vehicles": "18", "passengers": 120, "students": 0, "staff": 120,
+                    "approved_kms": 8500.0, "actual_kms": 0.0, "additional_kms": 0.0,
+                    "diesel_litres": 0.0, "fuel_expense": 0.0,
+                    "repair_maint": 0.0, "employee_cost": 0.0, "other_ops": 0.0,
+                    "statutory_fc": 0.0, "insurance": 0.0,
+                    "budget_approved": 3800000.0, "budget_spent": 0.0,
+                    "fee_demand": 0.0, "fee_collected": 0.0,
+                    "tickets_raised": 0, "tickets_closed": 0, "incidents": 0
+                },
+                "University": {
+                    "vehicles": "16", "passengers": 1230, "students": 1150, "staff": 80,
+                    "approved_kms": 55097.0, "actual_kms": 0.0, "additional_kms": 0.0,
+                    "diesel_litres": 0.0, "fuel_expense": 0.0,
+                    "repair_maint": 0.0, "employee_cost": 0.0, "other_ops": 0.0,
+                    "statutory_fc": 0.0, "insurance": 0.0,
+                    "budget_approved": 14000000.0, "budget_spent": 0.0,
+                    "fee_demand": 9500000.0, "fee_collected": 0.0,
+                    "tickets_raised": 0, "tickets_closed": 0, "incidents": 0
+                }
+            }
+            for b_name, b_data in DISTINCT_TRANSPORT_BRANCH_DEFAULTS.items():
+                db.execute_commit("""
+                INSERT INTO transport_census_entries (
+                    period_id, branch, vehicles_count, passengers_count, students_count, staff_count,
+                    approved_kms, actual_kms, additional_kms, diesel_litres, fuel_expenses,
+                    fc_cost, statutory_cost, repair_maintenance_cost, employee_cost, other_cost, total_expenses,
+                    fee_demand, fee_collected, fee_unpaid, approved_budget, cumulative_budget_spent, balance,
+                    service_tickets_raised, service_tickets_closed, service_tickets_open,
+                    statutory_compliance, incidents_count, remarks
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    1, %s, %s
+                )
+                ON CONFLICT (period_id, branch) DO NOTHING;
+                """, (
+                    new_period["id"], b_name, b_data["vehicles"], b_data["passengers"], b_data["students"], b_data["staff"],
+                    b_data["approved_kms"], b_data["actual_kms"], b_data["additional_kms"], b_data["diesel_litres"], b_data["fuel_expense"],
+                    b_data["statutory_fc"], b_data["insurance"], b_data["repair_maint"], b_data["employee_cost"], b_data["other_ops"], 0.0,
+                    b_data["fee_demand"], b_data["fee_collected"], b_data["fee_demand"] - b_data["fee_collected"],
+                    b_data["budget_approved"], b_data["budget_spent"], b_data["budget_approved"] - b_data["budget_spent"],
+                    b_data["tickets_raised"], b_data["tickets_closed"], 0,
+                    b_data["incidents"], f"{b_name} fleet metrics"
+                ))
+
+            # Clone vehicle fleet roster (all 58 buses) from latest existing transport period with zeroed expenses
+            latest_t_period = db.execute_query(
+                "SELECT id FROM billing_periods WHERE module = 'transport' AND id != %s ORDER BY start_date DESC LIMIT 1;",
+                (new_period["id"],),
+                fetch_all=False
+            )
+            if latest_t_period:
+                template_p_id = latest_t_period["id"]
+                db.execute_commit("""
+                    INSERT INTO transport_vehicle_entries (
+                        period_id, branch, vehicle_no, make, model, display_order, remarks,
+                        fuel_expenses, fc_cost, statutory_cost, repair_maintenance, parking_fastag,
+                        employee_cost, other_cost, total_expenses, diesel_litres, km_run, mileage
+                    )
+                    SELECT %s, branch, vehicle_no, make, model, display_order, remarks,
+                        0.0, 0.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+                    FROM transport_vehicle_entries WHERE period_id = %s
+                    ON CONFLICT DO NOTHING;
+                """, (new_period["id"], template_p_id))
+
+            # Initialize monthly expense entries for all transport cost heads for each branch
+            db.execute_commit("""
+                INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, amount, remarks, status, branch)
+                SELECT 'transport', %s, ch.id, 0.0, '', 'draft', b.branch
+                FROM cost_heads ch
+                JOIN expense_categories ec ON ch.category_id = ec.id
+                CROSS JOIN (VALUES ('Common'), ('RPS'), ('KPM'), ('University')) AS b(branch)
+                WHERE ec.module = 'transport'
+                ON CONFLICT (module, period_id, cost_head_id, branch) DO NOTHING;
+            """, (new_period["id"],))
+
+        return {"status": "success", "period": new_period, "branch": req.branch or "all"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

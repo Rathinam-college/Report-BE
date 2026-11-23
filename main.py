@@ -821,6 +821,242 @@ def update_hostel_budget_tracking(req: Dict[str, Any]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/api/food/budget-tracking")
+def get_food_budget_tracking():
+    """
+    Returns the official 8-head Food Budget Tracking Summary directly from PostgreSQL.
+    """
+    try:
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS food_budget_tracking (
+                        id SERIAL PRIMARY KEY,
+                        s_no INT NOT NULL,
+                        budget_head VARCHAR(120) UNIQUE NOT NULL,
+                        sanctioned_amount NUMERIC(14,2) DEFAULT 0.0,
+                        month_limit NUMERIC(14,2) DEFAULT 0.0,
+                        jun_26_actual NUMERIC(14,2) DEFAULT 0.0,
+                        jul_26_actual NUMERIC(14,2) DEFAULT 0.0,
+                        aug_26_actual NUMERIC(14,2) DEFAULT 0.0,
+                        sep_26_actual NUMERIC(14,2) DEFAULT 0.0,
+                        oct_26_actual NUMERIC(14,2) DEFAULT 0.0,
+                        nov_26_actual NUMERIC(14,2) DEFAULT 0.0,
+                        dec_26_actual NUMERIC(14,2) DEFAULT 0.0,
+                        monthly_actuals JSONB DEFAULT '{}',
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                cur.execute("SELECT * FROM food_budget_tracking ORDER BY s_no ASC")
+                rows = cur.fetchall()
+                desc = [d[0] for d in cur.description]
+                items = []
+                for r in rows:
+                    row_dict = dict(zip(desc, r))
+                    conv = {}
+                    for k, v in row_dict.items():
+                        if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool):
+                            conv[k] = float(v)
+                        else:
+                            conv[k] = v
+                    items.append(conv)
+
+                if not items:
+                    default_heads = [
+                        (1, 'Food Material', 105000000.0, 8750000.0, 6662557.0, 7667497.0, 10934147.0, 10934147.0, 10123675.0),
+                        (2, 'Food Team Salary', 36000000.0, 3000000.0, 2650000.0, 2870000.0, 2970000.0, 3309814.0, 3496221.0),
+                        (3, 'Contract Labour Expenses', 4800000.0, 400000.0, 144212.0, 97183.0, 339814.0, 0.0, 0.0),
+                        (4, 'Catering Vendor Expenses', 6000000.0, 500000.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                        (5, 'FC Maintenance/Power/Water/Vehicle', 6600000.0, 550000.0, 426223.0, 448729.0, 577127.0, 577127.0, 459483.0),
+                        (6, 'Event/Additional Food', 3000000.0, 250000.0, 254000.0, 114490.0, 76775.0, 76775.0, 211000.0),
+                        (7, 'Food Festival', 6000000.0, 500000.0, 0.0, 551639.0, 0.0, 0.0, 0.0),
+                        (8, 'Staff Welfare', 1800000.0, 150000.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                    ]
+                    for dh in default_heads:
+                        s_no, b_head, sanc, limit, jun, jul, aug, sep, oct_val = dh
+                        m_dict = {'12': jun, '14': jul, '18': aug, '19': sep, '311': oct_val}
+                        cur.execute('''
+                            INSERT INTO food_budget_tracking 
+                            (s_no, budget_head, sanctioned_amount, month_limit, jun_26_actual, jul_26_actual, aug_26_actual, sep_26_actual, oct_26_actual, monthly_actuals)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (budget_head) DO NOTHING;
+                        ''', (s_no, b_head, sanc, limit, jun, jul, aug, sep, oct_val, json.dumps(m_dict)))
+                    conn.commit()
+                    cur.execute("SELECT * FROM food_budget_tracking ORDER BY s_no ASC")
+                    rows = cur.fetchall()
+                    items = []
+                    for r in rows:
+                        row_dict = dict(zip(desc, r))
+                        conv = {k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v) for k, v in row_dict.items()}
+                        items.append(conv)
+
+                months = ["jun_26_actual", "jul_26_actual", "aug_26_actual", "sep_26_actual", "oct_26_actual", "nov_26_actual", "dec_26_actual"]
+                monthly_totals = {m: sum(float(r.get(m) or 0) for r in items) for m in months}
+
+                return {
+                    "status": "success",
+                    "items": items,
+                    "total_sanctioned": sum(float(r.get("sanctioned_amount") or 0) for r in items),
+                    "total_month_limit": sum(float(r.get("month_limit") or 0) for r in items),
+                    "monthly_totals": monthly_totals
+                }
+        finally:
+            db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/food/budget-tracking")
+def update_food_budget_tracking(req: Dict[str, Any]):
+    """
+    Updates or inserts budget heads and monthly targets/actuals for Food.
+    """
+    try:
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                items = req.get("items") if isinstance(req, dict) and "items" in req else ([req] if isinstance(req, dict) else req)
+                month_cols = ["jun_26_actual", "jul_26_actual", "aug_26_actual", "sep_26_actual", "oct_26_actual", "nov_26_actual", "dec_26_actual"]
+                for item in items:
+                    b_head = item.get("budget_head")
+                    if not b_head:
+                        continue
+                    cols = ["s_no", "budget_head", "sanctioned_amount", "month_limit"] + month_cols
+                    vals = [
+                        item.get("s_no", 1), b_head, float(item.get("sanctioned_amount") or 0.0), float(item.get("month_limit") or 0.0)
+                    ] + [float(item.get(c) or 0.0) for c in month_cols]
+
+                    if "monthly_actuals" in item and item["monthly_actuals"] is not None:
+                        cols.append("monthly_actuals")
+                        vals.append(json.dumps(item["monthly_actuals"]) if isinstance(item["monthly_actuals"], dict) else str(item["monthly_actuals"]))
+
+                    placeholders = ", ".join(["%s"] * len(cols))
+                    col_names = ", ".join(cols)
+                    
+                    update_set = [
+                        "s_no = EXCLUDED.s_no",
+                        "sanctioned_amount = EXCLUDED.sanctioned_amount",
+                        "month_limit = EXCLUDED.month_limit",
+                        "updated_at = CURRENT_TIMESTAMP"
+                    ]
+                    for col in month_cols:
+                        update_set.append(f"{col} = EXCLUDED.{col}")
+                    if "monthly_actuals" in cols:
+                        update_set.append("monthly_actuals = EXCLUDED.monthly_actuals")
+
+                    cur.execute(f"""
+                        INSERT INTO food_budget_tracking ({col_names})
+                        VALUES ({placeholders})
+                        ON CONFLICT (budget_head) DO UPDATE SET
+                            {', '.join(update_set)};
+                    """, tuple(vals))
+
+                conn.commit()
+                return {"status": "success", "message": "Food budget tracking updated successfully"}
+        finally:
+            db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/food/budget-tracking/sync")
+def sync_food_budget_tracking():
+    """
+    Recalculates and synchronizes actual food expense entries directly into the 8 food budget heads.
+    """
+    try:
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ch.id, ch.name, ec.name as category_name
+                    FROM cost_heads ch
+                    JOIN expense_categories ec ON ch.category_id = ec.id
+                    WHERE ec.module = 'food';
+                """)
+                cost_heads_map = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+
+                cur.execute("""
+                    SELECT m.cost_head_id, m.period_id, p.period_code, p.period_label, m.amount
+                    FROM monthly_expense_entries m
+                    JOIN billing_periods p ON m.period_id = p.id
+                    JOIN cost_heads ch ON m.cost_head_id = ch.id
+                    JOIN expense_categories ec ON ch.category_id = ec.id
+                    WHERE ec.module = 'food';
+                """)
+                entries = cur.fetchall()
+
+                budget_head_sums = {
+                    "Food Material": {},
+                    "Food Team Salary": {},
+                    "Contract Labour Expenses": {},
+                    "Catering Vendor Expenses": {},
+                    "FC Maintenance/Power/Water/Vehicle": {},
+                    "Event/Additional Food": {},
+                    "Food Festival": {},
+                    "Staff Welfare": {}
+                }
+
+                for ch_id, pid, pcode, plabel, amt in entries:
+                    if ch_id not in cost_heads_map:
+                        continue
+                    ch_name, cat_name = cost_heads_map[ch_id]
+                    ch_lower = ch_name.lower()
+                    cat_lower = cat_name.lower()
+                    amount = float(amt or 0.0)
+
+                    target_head = None
+                    if "material" in cat_lower or "material" in ch_lower or "gas" in ch_lower:
+                        target_head = "Food Material"
+                    elif "salary" in ch_lower:
+                        target_head = "Food Team Salary"
+                    elif "housekeeping" in ch_lower or "adithya" in ch_lower or "contract" in ch_lower:
+                        target_head = "Contract Labour Expenses"
+                    elif "catering" in ch_lower or "vendor" in ch_lower:
+                        target_head = "Catering Vendor Expenses"
+                    elif "maintenance" in cat_lower or "power" in cat_lower or "vehicle" in ch_lower or "water" in ch_lower or "food court" in ch_lower:
+                        target_head = "FC Maintenance/Power/Water/Vehicle"
+                    elif "festival" in cat_lower or "festival" in ch_lower:
+                        target_head = "Food Festival"
+                    elif "event" in cat_lower or "event" in ch_lower:
+                        target_head = "Event/Additional Food"
+                    elif "welfare" in cat_lower or "welfare" in ch_lower:
+                        target_head = "Staff Welfare"
+                    else:
+                        target_head = "Food Material"
+
+                    if target_head:
+                        budget_head_sums[target_head][str(pid)] = budget_head_sums[target_head].get(str(pid), 0.0) + amount
+
+                for b_head, period_dict in budget_head_sums.items():
+                    jun_val = period_dict.get('12', 0.0)
+                    jul_val = period_dict.get('14', 0.0)
+                    aug_val = period_dict.get('18', 0.0)
+                    sep_val = period_dict.get('19', 0.0)
+                    oct_val = period_dict.get('311', 0.0)
+                    cur.execute("""
+                        UPDATE food_budget_tracking
+                        SET jun_26_actual = %s,
+                            jul_26_actual = %s,
+                            aug_26_actual = %s,
+                            sep_26_actual = %s,
+                            oct_26_actual = %s,
+                            monthly_actuals = %s,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE budget_head = %s;
+                    """, (jun_val, jul_val, aug_val, sep_val, oct_val, json.dumps(period_dict), b_head))
+
+                conn.commit()
+                return {"status": "success", "message": "Food budget tracking synced successfully from monthly ledger"}
+        finally:
+            db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.put("/api/periods/{period_id}")
 def update_period(period_id: int, req: PeriodUpdate):
     """
@@ -1238,6 +1474,19 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
         # Dining Census / Headcounts removed for Food module
         census_data = {}
 
+        # Query Food Budget Tracking
+        food_budget_tracking_data = []
+        if module in ('food', 'all', None):
+            try:
+                fb_rows = db.execute_query("SELECT * FROM food_budget_tracking ORDER BY s_no ASC")
+                for fbr in fb_rows:
+                    food_budget_tracking_data.append({
+                        k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
+                        for k, v in fbr.items()
+                    })
+            except Exception as fbe:
+                print(f"[Food Budget Query Notice] {fbe}")
+
         # Query Hostel Census / Operational Metrics (when module == 'hostel')
         hostel_census_data = {}
         hostel_budget_tracking_data = []
@@ -1436,6 +1685,7 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
             "census": census_data,
             "hostel_census": hostel_census_data,
             "hostel_budget_tracking": hostel_budget_tracking_data if (module in ('hostel', 'all', None) or hostel_budget_tracking_data) else None,
+            "food_budget_tracking": food_budget_tracking_data if (module in ('food', 'all', None) or food_budget_tracking_data) else None,
             "transport_census": transport_census_data,
             "transport_census_by_branch": transport_census_by_branch if module == "transport" else None,
             "matrix_by_branch": matrix_by_branch if module == "transport" else None,

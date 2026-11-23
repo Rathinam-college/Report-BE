@@ -443,12 +443,12 @@ def get_periods(module: Optional[str] = None):
     try:
         if module and module != "all":
             return db.execute_query(
-                "SELECT id, period_code, period_label, start_date, end_date, operating_days, is_closed, module "
+                "SELECT id, period_code, period_label, start_date, end_date, operating_days, is_closed, module, COALESCE(branch, 'all') AS branch "
                 "FROM billing_periods WHERE module = %s ORDER BY start_date",
                 (module,)
             )
         return db.execute_query(
-            "SELECT id, period_code, period_label, start_date, end_date, operating_days, is_closed, module "
+            "SELECT id, period_code, period_label, start_date, end_date, operating_days, is_closed, module, COALESCE(branch, 'all') AS branch "
             "FROM billing_periods ORDER BY start_date"
         )
     except Exception as e:
@@ -498,13 +498,13 @@ def create_period(req: PeriodCreate):
         operating_days = req.operating_days if req.operating_days is not None else last_day
 
         insert_sql = """
-        INSERT INTO billing_periods (fiscal_year_id, period_code, period_label, start_date, end_date, operating_days, is_closed, module)
-        VALUES (1, %s, %s, %s, %s, %s, false, %s)
-        RETURNING id, period_code, period_label, module;
+        INSERT INTO billing_periods (fiscal_year_id, period_code, period_label, start_date, end_date, operating_days, is_closed, module, branch)
+        VALUES (1, %s, %s, %s, %s, %s, false, %s, %s)
+        RETURNING id, period_code, period_label, module, branch;
         """
         new_period = db.execute_query(
             insert_sql,
-            (derived_code, label, start_date, end_date, operating_days, mod),
+            (derived_code, label, start_date, end_date, operating_days, mod, req.branch or 'all'),
             fetch_all=False
         )
 
@@ -574,7 +574,10 @@ def create_period(req: PeriodCreate):
                 ON CONFLICT DO NOTHING;
                 """, (new_period["id"], req.clone_from_period_id))
         elif mod == "transport":
-            # Distinct baseline initialization across all 4 branches when creating a new month
+            # Distinct baseline initialization: if req.branch is specified (e.g. 'KPM'), ONLY initialize for that branch!
+            target_branch = req.branch if (req.branch and req.branch != "all") else None
+            branches_to_seed = [target_branch] if target_branch else ["Common", "RPS", "KPM", "University"]
+
             DISTINCT_TRANSPORT_BRANCH_DEFAULTS = {
                 "RPS": {
                     "vehicles": "19", "passengers": 482, "students": 447, "staff": 35,
@@ -617,7 +620,10 @@ def create_period(req: PeriodCreate):
                     "tickets_raised": 0, "tickets_closed": 0, "incidents": 0
                 }
             }
-            for b_name, b_data in DISTINCT_TRANSPORT_BRANCH_DEFAULTS.items():
+            for b_name in branches_to_seed:
+                b_data = DISTINCT_TRANSPORT_BRANCH_DEFAULTS.get(b_name)
+                if not b_data:
+                    continue
                 db.execute_commit("""
                 INSERT INTO transport_census_entries (
                     period_id, branch, vehicles_count, passengers_count, students_count, staff_count,
@@ -645,7 +651,7 @@ def create_period(req: PeriodCreate):
                     b_data["incidents"], f"{b_name} fleet metrics"
                 ))
 
-            # Clone vehicle fleet roster (all 58 buses) from latest existing transport period with zeroed expenses
+            # Clone vehicle fleet roster for target branches from latest existing transport period
             latest_t_period = db.execute_query(
                 "SELECT id FROM billing_periods WHERE module = 'transport' AND id != %s ORDER BY start_date DESC LIMIT 1;",
                 (new_period["id"],),
@@ -653,29 +659,30 @@ def create_period(req: PeriodCreate):
             )
             if latest_t_period:
                 template_p_id = latest_t_period["id"]
-                db.execute_commit("""
-                    INSERT INTO transport_vehicle_entries (
-                        period_id, branch, vehicle_no, make, model, display_order, remarks,
-                        fuel_expenses, fc_cost, statutory_cost, repair_maintenance, parking_fastag,
-                        employee_cost, other_cost, total_expenses, diesel_litres, km_run, mileage
-                    )
-                    SELECT %s, branch, vehicle_no, make, model, display_order, remarks,
-                        0.0, 0.0, 0.0, 0.0, 0.0,
-                        0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-                    FROM transport_vehicle_entries WHERE period_id = %s
-                    ON CONFLICT DO NOTHING;
-                """, (new_period["id"], template_p_id))
+                for b_name in branches_to_seed:
+                    db.execute_commit("""
+                        INSERT INTO transport_vehicle_entries (
+                            period_id, branch, vehicle_no, make, model, display_order, remarks,
+                            fuel_expenses, fc_cost, statutory_cost, repair_maintenance, parking_fastag,
+                            employee_cost, other_cost, total_expenses, diesel_litres, km_run, mileage
+                        )
+                        SELECT %s, branch, vehicle_no, make, model, display_order, remarks,
+                            0.0, 0.0, 0.0, 0.0, 0.0,
+                            0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+                        FROM transport_vehicle_entries WHERE period_id = %s AND branch = %s
+                        ON CONFLICT DO NOTHING;
+                    """, (new_period["id"], template_p_id, b_name))
 
-            # Initialize monthly expense entries for all transport cost heads for each branch
-            db.execute_commit("""
-                INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, amount, remarks, status, branch)
-                SELECT 'transport', %s, ch.id, 0.0, '', 'draft', b.branch
-                FROM cost_heads ch
-                JOIN expense_categories ec ON ch.category_id = ec.id
-                CROSS JOIN (VALUES ('Common'), ('RPS'), ('KPM'), ('University')) AS b(branch)
-                WHERE ec.module = 'transport'
-                ON CONFLICT (module, period_id, cost_head_id, branch) DO NOTHING;
-            """, (new_period["id"],))
+            # Initialize monthly expense entries for target branches
+            for b_name in branches_to_seed:
+                db.execute_commit("""
+                    INSERT INTO monthly_expense_entries (module, period_id, cost_head_id, amount, remarks, status, branch)
+                    SELECT 'transport', %s, ch.id, 0.0, '', 'draft', %s
+                    FROM cost_heads ch
+                    JOIN expense_categories ec ON ch.category_id = ec.id
+                    WHERE ec.module = 'transport'
+                    ON CONFLICT (module, period_id, cost_head_id, branch) DO NOTHING;
+                """, (new_period["id"], b_name))
 
         return {"status": "success", "period": new_period, "branch": req.branch or "all"}
     except Exception as e:
@@ -945,12 +952,12 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
     try:
         if module and module != "all":
             periods = db.execute_query(
-                "SELECT id, period_code, period_label, start_date, operating_days, is_closed, module FROM billing_periods WHERE module = %s ORDER BY start_date",
+                "SELECT id, period_code, period_label, start_date, operating_days, is_closed, module, COALESCE(branch, 'all') AS branch FROM billing_periods WHERE module = %s ORDER BY start_date",
                 (module,)
             )
         else:
             periods = db.execute_query(
-                "SELECT id, period_code, period_label, start_date, operating_days, is_closed, module FROM billing_periods ORDER BY start_date"
+                "SELECT id, period_code, period_label, start_date, operating_days, is_closed, module, COALESCE(branch, 'all') AS branch FROM billing_periods ORDER BY start_date"
             )
         num_periods = len(periods) or 1
 

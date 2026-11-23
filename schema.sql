@@ -59,8 +59,9 @@ CREATE TABLE billing_periods (
     operating_days  INT NOT NULL DEFAULT 30,           -- Days mess operated
     is_closed       BOOLEAN NOT NULL DEFAULT false,
     module          VARCHAR(50) NOT NULL DEFAULT 'food', -- 'food', 'hostel', 'transport'
+    branch          VARCHAR(50) NOT NULL DEFAULT 'all',  -- 'all', 'Common', 'RPS', 'KPM', 'University'
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_billing_periods_module_code UNIQUE (module, period_code)
+    CONSTRAINT uq_billing_periods_module_branch_code UNIQUE (module, branch, period_code)
 );
 
 -- Vendors & Service Agencies Master

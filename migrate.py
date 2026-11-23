@@ -57,12 +57,15 @@ MIGRATION_STEPS = [
             operating_days INT NOT NULL DEFAULT 30,
             is_closed BOOLEAN NOT NULL DEFAULT false,
             module VARCHAR(50) NOT NULL DEFAULT 'food',
+            branch VARCHAR(50) NOT NULL DEFAULT 'all',
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         ALTER TABLE billing_periods ADD COLUMN IF NOT EXISTS module VARCHAR(50) NOT NULL DEFAULT 'food';
+        ALTER TABLE billing_periods ADD COLUMN IF NOT EXISTS branch VARCHAR(50) NOT NULL DEFAULT 'all';
         ALTER TABLE billing_periods DROP CONSTRAINT IF EXISTS billing_periods_period_code_key;
         ALTER TABLE billing_periods DROP CONSTRAINT IF EXISTS uq_billing_periods_module_code;
-        ALTER TABLE billing_periods ADD CONSTRAINT uq_billing_periods_module_code UNIQUE (module, period_code);
+        ALTER TABLE billing_periods DROP CONSTRAINT IF EXISTS uq_billing_periods_module_branch_code;
+        ALTER TABLE billing_periods ADD CONSTRAINT uq_billing_periods_module_branch_code UNIQUE (module, branch, period_code);
         CREATE INDEX IF NOT EXISTS idx_billing_periods_module_date ON billing_periods (module, start_date);
         """
     ),

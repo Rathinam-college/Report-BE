@@ -1391,6 +1391,44 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
         except Exception as te:
             print(f"[Transport Census Query Notice] {te}")
 
+        # Query CCTV Entries & Parameters if module == 'cctv' or 'all'
+        cctv_entries_data = {}
+        cctv_parameters_data = []
+        if module == "cctv":
+            try:
+                c_rows = db.execute_query("SELECT * FROM cctv_monthly_entries;")
+                for cr in c_rows:
+                    p_str = str(cr["period_id"])
+                    cctv_entries_data[p_str] = {
+                        k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
+                        for k, v in cr.items()
+                    }
+                p_rows = db.execute_query("""
+                    SELECT id, s_no, param_key, param_name, section, section_order,
+                           input_type, unit, formula, display_order, is_system, is_active
+                    FROM cctv_master_parameters
+                    WHERE is_active = TRUE
+                    ORDER BY display_order ASC, section_order ASC, id ASC;
+                """)
+                cctv_parameters_data = [dict(pr) for pr in p_rows]
+
+                # Populate grand_total for CCTV
+                cctv_amounts = {}
+                tot_cctv = 0.0
+                for p in periods:
+                    p_id = p["id"]
+                    p_str = str(p_id)
+                    exp = float(cctv_entries_data.get(p_str, {}).get("total_expenses") or 0.0)
+                    cctv_amounts[p_id] = exp
+                    cctv_amounts[p_str] = exp
+                    tot_cctv += exp
+                grand_total_data = {
+                    "total": round(tot_cctv, 2),
+                    "amounts": cctv_amounts
+                }
+            except Exception as ce:
+                print(f"[CCTV Matrix Query Notice] {ce}")
+
         return {
             "periods": periods,
             "categories": categories_data,
@@ -1403,6 +1441,8 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
             "matrix_by_branch": matrix_by_branch if module == "transport" else None,
             "branches": ["all", "RPS", "KPM", "Common", "University"] if module == "transport" else None,
             "active_branch": branch or "all",
+            "cctv_entries": cctv_entries_data if module in ("cctv", "all") else None,
+            "cctv_parameters": cctv_parameters_data if module in ("cctv", "all") else None,
             "module": module
         }
     except Exception as e:
@@ -2568,11 +2608,137 @@ def reorder_transport_parameters(req: ReorderParametersRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/hostel/parameters/reorder")
-def reorder_hostel_parameters(req: ReorderParametersRequest):
+# -------------------------------------------------------------
+# CCTV MASTER PARAMETERS CRUD ENDPOINTS
+# -------------------------------------------------------------
+@app.get("/api/cctv/parameters")
+def get_cctv_parameters():
     """
-    Updates the display order of hostel parameters following a drag-and-drop or move step event.
+    Returns active CCTV master parameters grouped into sections.
     """
+    try:
+        rows = db.execute_query("""
+            SELECT id, s_no, param_key, param_name, section, section_order,
+                   input_type, unit, formula, display_order, is_system, is_active
+            FROM cctv_master_parameters
+            WHERE is_active = TRUE
+            ORDER BY display_order ASC, section_order ASC, id ASC;
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/cctv/parameters")
+def create_cctv_parameter(req: Dict[str, Any]):
+    """
+    Creates or updates a CCTV parameter row in Master Data.
+    """
+    try:
+        param_name = str(req.get("param_name", "")).strip()
+        if not param_name:
+            raise HTTPException(status_code=400, detail="Parameter name is required")
+
+        param_key = str(req.get("param_key", "")).strip().lower()
+        if not param_key:
+            param_key = re.sub(r"[^a-z0-9_]+", "_", param_name.lower()).strip("_")
+
+        s_no = str(req.get("s_no", "")).strip()
+        section = str(req.get("section", "General")).strip()
+        section_order = int(req.get("section_order", 1))
+        input_type = str(req.get("input_type", "number")).strip().lower()
+        unit = str(req.get("unit", "")).strip()
+        formula = req.get("formula")
+        display_order = int(req.get("display_order", 999))
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM cctv_master_parameters WHERE param_key = %s;", (param_key,))
+                existing = cur.fetchone()
+                if existing:
+                    cur.execute("""
+                        UPDATE cctv_master_parameters
+                        SET s_no = %s, param_name = %s, section = %s, section_order = %s,
+                            input_type = %s, unit = %s, formula = %s, display_order = %s, is_active = TRUE
+                        WHERE id = %s
+                        RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
+                    """, (s_no, param_name, section, section_order, input_type, unit, formula, display_order, existing[0]))
+                else:
+                    cur.execute("""
+                        INSERT INTO cctv_master_parameters (
+                            s_no, param_key, param_name, section, section_order,
+                            input_type, unit, formula, display_order, is_system, is_active
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)
+                        RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;
+                    """, (s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order))
+                row = cur.fetchone()
+                conn.commit()
+                return {
+                    "status": "success",
+                    "message": "CCTV parameter saved successfully",
+                    "data": {
+                        "id": row[0],
+                        "s_no": row[1],
+                        "param_key": row[2],
+                        "param_name": row[3],
+                        "section": row[4],
+                        "section_order": row[5],
+                        "input_type": row[6],
+                        "unit": row[7],
+                        "formula": row[8],
+                        "display_order": row[9],
+                        "is_system": row[10],
+                        "is_active": row[11]
+                    }
+                }
+        finally:
+            db.release_db_connection(conn)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/cctv/parameters/{param_id}")
+def update_cctv_parameter(param_id: int, req: Dict[str, Any]):
+    try:
+        fields = []
+        vals = []
+        for k in ["s_no", "param_name", "section", "section_order", "input_type", "unit", "formula", "display_order"]:
+            if k in req:
+                fields.append(f"{k} = %s")
+                vals.append(req[k])
+        if not fields:
+            return {"status": "success", "message": "No changes requested"}
+        vals.append(param_id)
+        query = f"UPDATE cctv_master_parameters SET {', '.join(fields)} WHERE id = %s RETURNING id, s_no, param_key, param_name, section, section_order, input_type, unit, formula, display_order, is_system, is_active;"
+        row = db.execute_query(query, tuple(vals), fetch_all=False)
+        if not row:
+            raise HTTPException(status_code=404, detail="CCTV parameter not found")
+        return {"status": "success", "message": "CCTV parameter updated successfully", "data": dict(row)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/cctv/parameters/{param_id}")
+def delete_cctv_parameter(param_id: int):
+    try:
+        param = db.execute_query("SELECT id, param_key FROM cctv_master_parameters WHERE id = %s;", (param_id,), fetch_all=False)
+        if not param:
+            raise HTTPException(status_code=404, detail="CCTV parameter not found")
+        db.execute_commit("UPDATE cctv_master_parameters SET is_active = FALSE WHERE id = %s;", (param_id,))
+        return {"status": "success", "message": "CCTV parameter deactivated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/cctv/parameters/reorder")
+def reorder_cctv_parameters(req: ReorderParametersRequest):
     try:
         if not req.parameter_ids:
             return {"status": "success", "message": "No parameters provided"}
@@ -2580,13 +2746,206 @@ def reorder_hostel_parameters(req: ReorderParametersRequest):
         try:
             with conn.cursor() as cur:
                 for order, pid in enumerate(req.parameter_ids, start=1):
-                    cur.execute("UPDATE hostel_master_parameters SET display_order = %s WHERE id = %s;", (order, pid))
+                    cur.execute("UPDATE cctv_master_parameters SET display_order = %s WHERE id = %s;", (order, pid))
                 conn.commit()
-                return {"status": "success", "message": "Hostel parameters reordered successfully in database"}
+                return {"status": "success", "message": "CCTV parameters reordered successfully"}
         finally:
             db.release_db_connection(conn)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------------
+# CCTV MONTHLY ENTRIES CRUD ENDPOINTS
+# -------------------------------------------------------------
+@app.get("/api/cctv/entries")
+def get_cctv_entries(period_id: Optional[int] = None):
+    try:
+        if period_id is not None:
+            row = db.execute_query("SELECT * FROM cctv_monthly_entries WHERE period_id = %s;", (period_id,), fetch_all=False)
+            clean = {}
+            if row:
+                clean = {
+                    k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
+                    for k, v in row.items()
+                }
+            return {"status": "success", "period_id": period_id, "data": clean}
+
+        rows = db.execute_query("SELECT * FROM cctv_monthly_entries ORDER BY period_id ASC;")
+        res = []
+        for r in rows:
+            res.append({
+                k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
+                for k, v in r.items()
+            })
+        return {"status": "success", "data": res}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/cctv/entries")
+def save_cctv_entry(req: Dict[str, Any]):
+    """
+    Saves / updates monthly entry for CCTV with auto-calculated formulas.
+    """
+    try:
+        period_id = int(req.get("period_id"))
+        if not period_id:
+            raise HTTPException(status_code=400, detail="period_id is required")
+
+        def _n(key, default=0):
+            val = req.get(key)
+            if val is None or val == "":
+                return default
+            try:
+                return float(val)
+            except Exception:
+                return default
+
+        # 1. Projects
+        p_comp = int(_n("projects_completed", 0))
+        p_prog = int(_n("projects_in_progress", 0))
+        p_tot = p_comp + p_prog
+
+        # 2. Complaints
+        c_cctv = int(_n("complaints_cctv", 0))
+        c_bio = int(_n("complaints_biometric", 0))
+        c_flap = int(_n("complaints_flapbarrier", 0))
+        c_tot = c_cctv + c_bio + c_flap
+        c_rep = int(_n("repeated_complaints", 0))
+        c_time = round(_n("time_taken_complaints_hrs", 0.0), 2)
+        c_tat = round(_n("tat_complaints_hrs"), 2) if req.get("tat_complaints_hrs") is not None else (round(c_time / c_tot, 2) if c_tot > 0 else 0.0)
+
+        # 3. Service Requests
+        s_cctv = int(_n("service_cctv", 0))
+        s_bio = int(_n("service_biometric", 0))
+        s_flap = int(_n("service_flapbarrier", 0))
+        s_tot = s_cctv + s_bio + s_flap
+        s_rep = int(_n("repeated_work", 0))
+        s_time = round(_n("time_taken_service_hrs", 0.0), 2)
+        s_tat = round(_n("tat_service_hrs"), 2) if req.get("tat_service_hrs") is not None else (round(s_time / s_tot, 2) if s_tot > 0 else 0.0)
+
+        # 4. PPM
+        ppm = int(_n("ppm_count", 0))
+
+        # 5. Quality Issues
+        q_rec = int(_n("quality_issues_received", 0))
+        q_cls = int(_n("quality_issues_closed", 0))
+        q_opn = int(_n("quality_issues_open")) if req.get("quality_issues_open") is not None else max(0, q_rec - q_cls)
+
+        # 6. Expenses
+        mat_exp = round(_n("material_expenses", 0.0), 2)
+        lab_exp = round(_n("labour_expenses", 0.0), 2)
+        tot_exp = round(mat_exp + lab_exp, 2)
+
+        # 7. Budget Tracking
+        app_bud = round(_n("approved_budget", 0.0), 2)
+        cum_spent = round(_n("cumulative_budget_spent", tot_exp), 2)
+        bal = round(app_bud - cum_spent, 2)
+
+        remarks = str(req.get("remarks") or "")
+        custom_metrics = req.get("custom_metrics") or {}
+        if not isinstance(custom_metrics, dict):
+            custom_metrics = {}
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO cctv_monthly_entries (
+                        period_id,
+                        projects_completed, projects_in_progress, projects_total,
+                        complaints_cctv, complaints_biometric, complaints_flapbarrier, complaints_total,
+                        repeated_complaints, time_taken_complaints_hrs, tat_complaints_hrs,
+                        service_cctv, service_biometric, service_flapbarrier, service_total,
+                        repeated_work, time_taken_service_hrs, tat_service_hrs,
+                        ppm_count,
+                        quality_issues_received, quality_issues_closed, quality_issues_open,
+                        material_expenses, labour_expenses, total_expenses,
+                        approved_budget, cumulative_budget_spent, balance,
+                        remarks, custom_metrics, updated_at
+                    ) VALUES (
+                        %s,
+                        %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, %s,
+                        %s,
+                        %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, CURRENT_TIMESTAMP
+                    ) ON CONFLICT (period_id) DO UPDATE SET
+                        projects_completed = EXCLUDED.projects_completed,
+                        projects_in_progress = EXCLUDED.projects_in_progress,
+                        projects_total = EXCLUDED.projects_total,
+                        complaints_cctv = EXCLUDED.complaints_cctv,
+                        complaints_biometric = EXCLUDED.complaints_biometric,
+                        complaints_flapbarrier = EXCLUDED.complaints_flapbarrier,
+                        complaints_total = EXCLUDED.complaints_total,
+                        repeated_complaints = EXCLUDED.repeated_complaints,
+                        time_taken_complaints_hrs = EXCLUDED.time_taken_complaints_hrs,
+                        tat_complaints_hrs = EXCLUDED.tat_complaints_hrs,
+                        service_cctv = EXCLUDED.service_cctv,
+                        service_biometric = EXCLUDED.service_biometric,
+                        service_flapbarrier = EXCLUDED.service_flapbarrier,
+                        service_total = EXCLUDED.service_total,
+                        repeated_work = EXCLUDED.repeated_work,
+                        time_taken_service_hrs = EXCLUDED.time_taken_service_hrs,
+                        tat_service_hrs = EXCLUDED.tat_service_hrs,
+                        ppm_count = EXCLUDED.ppm_count,
+                        quality_issues_received = EXCLUDED.quality_issues_received,
+                        quality_issues_closed = EXCLUDED.quality_issues_closed,
+                        quality_issues_open = EXCLUDED.quality_issues_open,
+                        material_expenses = EXCLUDED.material_expenses,
+                        labour_expenses = EXCLUDED.labour_expenses,
+                        total_expenses = EXCLUDED.total_expenses,
+                        approved_budget = EXCLUDED.approved_budget,
+                        cumulative_budget_spent = EXCLUDED.cumulative_budget_spent,
+                        balance = EXCLUDED.balance,
+                        remarks = EXCLUDED.remarks,
+                        custom_metrics = EXCLUDED.custom_metrics,
+                        updated_at = CURRENT_TIMESTAMP;
+                """, (
+                    period_id,
+                    p_comp, p_prog, p_tot,
+                    c_cctv, c_bio, c_flap, c_tot,
+                    c_rep, c_time, c_tat,
+                    s_cctv, s_bio, s_flap, s_tot,
+                    s_rep, s_time, s_tat,
+                    ppm,
+                    q_rec, q_cls, q_opn,
+                    mat_exp, lab_exp, tot_exp,
+                    app_bud, cum_spent, bal,
+                    remarks, json.dumps(custom_metrics)
+                ))
+                conn.commit()
+
+                row = db.execute_query(
+                    "SELECT * FROM cctv_monthly_entries WHERE period_id = %s;",
+                    (period_id,),
+                    fetch_all=False
+                )
+                clean = {}
+                if row:
+                    clean = {
+                        k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
+                        for k, v in row.items()
+                    }
+                return {
+                    "status": "success",
+                    "message": f"CCTV monthly entry saved successfully for period {period_id}",
+                    "period_id": period_id,
+                    "data": clean
+                }
+        finally:
+            db.release_db_connection(conn)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 

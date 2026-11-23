@@ -3937,25 +3937,121 @@ def save_transport_census_bulk(req: Dict[str, Any]):
 # -------------------------------------------------------------
 
 @app.get("/api/transport/vehicles")
-def get_transport_vehicles(period_id: Optional[int] = None, branch: Optional[str] = "Common"):
+def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str] = "Common"):
     """
     Returns vehicle-wise fleet expense records, diesel consumption, KM run, and mileage
-    for a given transport billing period and branch (or all branches consolidated).
+    for a given transport billing period (or 'all' periods consolidated) and branch.
     """
     try:
-        # If period_id not provided, find the latest transport billing period
-        if not period_id:
+        b_filter = (branch or "Common").strip()
+        is_all_periods = str(period_id).lower() == "all"
+
+        if is_all_periods:
+            if b_filter == "all":
+                rows = db.execute_query(
+                    """
+                    SELECT 'all' AS period_id, branch, vehicle_no, make, model, 
+                           SUM(fuel_expenses) AS fuel_expenses, 
+                           SUM(fc_cost) AS fc_cost, 
+                           SUM(statutory_cost) AS statutory_cost, 
+                           SUM(repair_maintenance) AS repair_maintenance, 
+                           SUM(parking_fastag) AS parking_fastag, 
+                           SUM(employee_cost) AS employee_cost, 
+                           SUM(other_cost) AS other_cost, 
+                           SUM(total_expenses) AS total_expenses, 
+                           SUM(diesel_litres) AS diesel_litres, 
+                           SUM(km_run) AS km_run, 
+                           MIN(display_order) AS display_order
+                    FROM transport_vehicle_entries
+                    GROUP BY branch, vehicle_no, make, model
+                    ORDER BY branch, MIN(display_order), vehicle_no;
+                    """
+                )
+            else:
+                rows = db.execute_query(
+                    """
+                    SELECT 'all' AS period_id, branch, vehicle_no, make, model, 
+                           SUM(fuel_expenses) AS fuel_expenses, 
+                           SUM(fc_cost) AS fc_cost, 
+                           SUM(statutory_cost) AS statutory_cost, 
+                           SUM(repair_maintenance) AS repair_maintenance, 
+                           SUM(parking_fastag) AS parking_fastag, 
+                           SUM(employee_cost) AS employee_cost, 
+                           SUM(other_cost) AS other_cost, 
+                           SUM(total_expenses) AS total_expenses, 
+                           SUM(diesel_litres) AS diesel_litres, 
+                           SUM(km_run) AS km_run, 
+                           MIN(display_order) AS display_order
+                    FROM transport_vehicle_entries
+                    WHERE branch = %s
+                    GROUP BY branch, vehicle_no, make, model
+                    ORDER BY MIN(display_order), vehicle_no;
+                    """,
+                    (b_filter,)
+                )
+
+            clean_rows = []
+            for r in rows:
+                clean_item = {}
+                for k, v in r.items():
+                    if isinstance(v, Decimal):
+                        clean_item[k] = float(v)
+                    else:
+                        clean_item[k] = v
+                clean_item["id"] = f"agg-{clean_item['branch']}-{clean_item['vehicle_no']}"
+                km = clean_item.get("km_run", 0) or 0
+                diesel = clean_item.get("diesel_litres", 0) or 0
+                clean_item["mileage"] = round(km / diesel, 2) if diesel > 0 else 0.0
+                clean_rows.append(clean_item)
+
+            tot_fuel = sum(r.get("fuel_expenses", 0) for r in clean_rows)
+            tot_fc = sum(r.get("fc_cost", 0) for r in clean_rows)
+            tot_stat = sum(r.get("statutory_cost", 0) for r in clean_rows)
+            tot_rep = sum(r.get("repair_maintenance", 0) for r in clean_rows)
+            tot_park = sum(r.get("parking_fastag", 0) for r in clean_rows)
+            tot_emp = sum(r.get("employee_cost", 0) for r in clean_rows)
+            tot_oth = sum(r.get("other_cost", 0) for r in clean_rows)
+            tot_exp = sum(r.get("total_expenses", 0) for r in clean_rows)
+            tot_diesel = sum(r.get("diesel_litres", 0) for r in clean_rows)
+            tot_km = sum(r.get("km_run", 0) for r in clean_rows)
+            avg_mileage = round(tot_km / tot_diesel, 2) if tot_diesel > 0 else 0.0
+
+            summary = {
+                "bus_count": len(clean_rows),
+                "fuel_expenses": tot_fuel,
+                "fc_cost": tot_fc,
+                "statutory_cost": tot_stat,
+                "repair_maintenance": tot_rep,
+                "parking_fastag": tot_park,
+                "employee_cost": tot_emp,
+                "other_cost": tot_oth,
+                "total_expenses": tot_exp,
+                "diesel_litres": tot_diesel,
+                "km_run": tot_km,
+                "mileage": avg_mileage
+            }
+
+            return {
+                "status": "success",
+                "period_id": "all",
+                "branch": b_filter,
+                "vehicles": clean_rows,
+                "summary": summary,
+                "branch_summaries": {}
+            }
+
+        # Otherwise single period
+        numeric_period_id = int(period_id) if period_id else None
+        if not numeric_period_id:
             latest_p = db.execute_query(
                 "SELECT id FROM billing_periods WHERE module = 'transport' ORDER BY start_date DESC LIMIT 1;",
                 fetch_all=False
             )
             if latest_p:
-                period_id = latest_p["id"]
+                numeric_period_id = latest_p["id"]
             else:
                 return {"status": "success", "vehicles": [], "summary": {}, "branch_summaries": {}}
 
-        b_filter = (branch or "Common").strip()
-        
         if b_filter == "all":
             rows = db.execute_query(
                 """
@@ -3967,7 +4063,7 @@ def get_transport_vehicles(period_id: Optional[int] = None, branch: Optional[str
                 WHERE period_id = %s
                 ORDER BY branch, display_order, id;
                 """,
-                (period_id,)
+                (numeric_period_id,)
             )
         else:
             rows = db.execute_query(
@@ -3980,7 +4076,7 @@ def get_transport_vehicles(period_id: Optional[int] = None, branch: Optional[str
                 WHERE period_id = %s AND branch = %s
                 ORDER BY display_order, id;
                 """,
-                (period_id, b_filter)
+                (numeric_period_id, b_filter)
             )
 
         clean_rows = []

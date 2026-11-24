@@ -35,6 +35,67 @@ def seed():
     conn = get_db_connection()
     cur = conn.cursor()
 
+    # Ensure tables exist
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS cctv_master_parameters (
+            id SERIAL PRIMARY KEY,
+            s_no VARCHAR(20) DEFAULT '',
+            param_key VARCHAR(100) NOT NULL UNIQUE,
+            param_name VARCHAR(255) NOT NULL,
+            section VARCHAR(100) NOT NULL,
+            section_order INT NOT NULL DEFAULT 1,
+            input_type VARCHAR(50) NOT NULL DEFAULT 'number',
+            unit VARCHAR(50) DEFAULT '',
+            formula TEXT DEFAULT NULL,
+            display_order INT NOT NULL DEFAULT 50,
+            is_system BOOLEAN NOT NULL DEFAULT FALSE,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        ALTER TABLE cctv_master_parameters ADD COLUMN IF NOT EXISTS s_no VARCHAR(20) DEFAULT '';
+        CREATE INDEX IF NOT EXISTS idx_cctv_master_params_section ON cctv_master_parameters(section);
+        CREATE INDEX IF NOT EXISTS idx_cctv_master_params_active ON cctv_master_parameters(is_active);
+
+        CREATE TABLE IF NOT EXISTS cctv_monthly_entries (
+            id SERIAL PRIMARY KEY,
+            period_id INT NOT NULL UNIQUE REFERENCES billing_periods(id) ON DELETE CASCADE,
+            branch VARCHAR(50) NOT NULL DEFAULT 'all',
+            projects_completed INT DEFAULT 0,
+            projects_in_progress INT DEFAULT 0,
+            projects_total INT DEFAULT 0,
+            complaints_cctv INT DEFAULT 0,
+            complaints_biometric INT DEFAULT 0,
+            complaints_flapbarrier INT DEFAULT 0,
+            complaints_total INT DEFAULT 0,
+            repeated_complaints INT DEFAULT 0,
+            time_taken_complaints_hrs NUMERIC(10, 2) DEFAULT 0.0,
+            tat_complaints_hrs NUMERIC(10, 2) DEFAULT 0.0,
+            service_cctv INT DEFAULT 0,
+            service_biometric INT DEFAULT 0,
+            service_flapbarrier INT DEFAULT 0,
+            service_total INT DEFAULT 0,
+            repeated_work INT DEFAULT 0,
+            time_taken_service_hrs NUMERIC(10, 2) DEFAULT 0.0,
+            tat_service_hrs NUMERIC(10, 2) DEFAULT 0.0,
+            ppm_count INT DEFAULT 0,
+            quality_issues_received INT DEFAULT 0,
+            quality_issues_closed INT DEFAULT 0,
+            quality_issues_open INT DEFAULT 0,
+            material_expenses NUMERIC(15, 2) DEFAULT 0.0,
+            labour_expenses NUMERIC(15, 2) DEFAULT 0.0,
+            total_expenses NUMERIC(15, 2) DEFAULT 0.0,
+            approved_budget NUMERIC(15, 2) DEFAULT 0.0,
+            cumulative_budget_spent NUMERIC(15, 2) DEFAULT 0.0,
+            balance NUMERIC(15, 2) DEFAULT 0.0,
+            remarks TEXT DEFAULT '',
+            custom_metrics JSONB DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_cctv_monthly_entries_period ON cctv_monthly_entries(period_id);
+    ''')
+    conn.commit()
+
     # Seed parameters
     for p in params:
         cur.execute('''

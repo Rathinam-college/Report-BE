@@ -41,7 +41,7 @@ CANONICAL_HOSTEL_PARAMETERS = [
 
     # Section 5: Per Student & Area Metrics (Excel Rows 25 - 28)
     ('25', 'students_kpi', 'Number of students', 'Per Student & Area Metrics', 5, 28, 'single_count', 'Students', 'Total Students in Hostel'),
-    ('26', 'per_student_cost_month', 'Per student cost per month', 'Per Student & Area Metrics', 5, 29, 'cost', 'INR (₹)', 'Expenses occurred / Number of students'),
+    ('26', 'per_student_cost_month', 'Per student cost per month', 'Per Student & Area Metrics', 5, 29, 'cost', 'INR (₹)', 'Expenses occurred / Total Occupied'),
     ('27', 'per_student_cost_day', 'Per student cost per day', 'Per Student & Area Metrics', 5, 30, 'cost', 'INR (₹)', 'Per student cost per month / 30'),
     ('', 'sq_feet', 'Sq feet (Hostel Area)', 'Per Student & Area Metrics', 5, 31, 'single_number', 'sq.ft', None),
     ('', 'sq_feet_per_occupant', 'Sq feet per occupant in hostel', 'Per Student & Area Metrics', 5, 32, 'single_number', 'sq.ft/occ', 'Sq feet / Total Occupied'),

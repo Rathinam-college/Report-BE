@@ -3288,7 +3288,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
     dw_cost = float(_clean_num(hc.get("drinking_water_cost"), 0.0))
 
     sq_ft = float(_clean_num(hc.get("sq_feet"), 231701.0))
-    per_st_mo = round(exp_occ / st_tot, 2) if st_tot > 0 else 0.0
+    per_st_mo = round(exp_occ / occ_tot, 2) if occ_tot > 0 else (round(exp_occ / st_tot, 2) if st_tot > 0 else 0.0)
     per_st_day = round(per_st_mo / 30.0, 2)
     sq_ft_occ = round(sq_ft / occ_tot, 2) if occ_tot > 0 else (round(sq_ft / st_tot, 2) if st_tot > 0 else 0.0)
 
@@ -3728,7 +3728,7 @@ def compute_and_upsert_hostel_census(cur, period_id: int, hc: Dict[str, Any]):
     dw_cost = float(_clean_num(hc.get("drinking_water_cost"), 0.0))
 
     sq_ft = float(_clean_num(hc.get("sq_feet"), 231701.0))
-    per_st_mo = round(exp_occ / st_tot, 2) if st_tot > 0 else 0.0
+    per_st_mo = round(exp_occ / occ_tot, 2) if occ_tot > 0 else (round(exp_occ / st_tot, 2) if st_tot > 0 else 0.0)
     per_st_day = round(per_st_mo / 30.0, 2)
     sq_ft_occ = round(sq_ft / occ_tot, 2) if occ_tot > 0 else (round(sq_ft / st_tot, 2) if st_tot > 0 else 0.0)
 

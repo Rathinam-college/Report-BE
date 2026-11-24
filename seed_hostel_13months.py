@@ -77,9 +77,9 @@ def seed_hostel_13months():
     for item in DATA_13_MONTHS:
         pcode, plabel, sdate, edate, days = item[0], item[1], item[2], item[3], item[4]
         sql = """
-        INSERT INTO billing_periods (fiscal_year_id, period_code, period_label, start_date, end_date, operating_days, module)
-        VALUES (1, %s, %s, %s, %s, %s, 'hostel')
-        ON CONFLICT (module, period_code) DO UPDATE SET
+        INSERT INTO billing_periods (fiscal_year_id, period_code, period_label, start_date, end_date, operating_days, module, branch)
+        VALUES (1, %s, %s, %s, %s, %s, 'hostel', 'all')
+        ON CONFLICT (module, branch, period_code) DO UPDATE SET
             period_label = EXCLUDED.period_label,
             start_date = EXCLUDED.start_date,
             end_date = EXCLUDED.end_date,
@@ -172,7 +172,7 @@ def seed_hostel_13months():
         appr_budget = item[24]
         cum_spent = item[25]
         balance = appr_budget - cum_spent
-        per_stud_month = round(exp_occurred / students, 2) if students > 0 else 0
+        per_stud_month = round(exp_occurred / tot_occ, 2) if tot_occ > 0 else (round(exp_occurred / students, 2) if students > 0 else 0)
         per_stud_day = round(per_stud_month / 30, 2)
         sqft = 231701.0
         sqft_occupant = round(sqft / tot_occ, 2) if tot_occ > 0 else 0

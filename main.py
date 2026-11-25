@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Response, Request
+from fastapi.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 import os
 import uuid
@@ -69,10 +70,12 @@ def ensure_schema_compatibility():
             mime_type VARCHAR(100) DEFAULT '',
             is_link BOOLEAN NOT NULL DEFAULT FALSE,
             uploaded_by VARCHAR(100) DEFAULT 'User',
+            topic VARCHAR(255) DEFAULT '',
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_monthly_attachments_module_period ON monthly_attachments(module, period_id);
         """,
+        "ALTER TABLE monthly_attachments ADD COLUMN IF NOT EXISTS topic VARCHAR(255) DEFAULT '';",
         "ALTER TABLE monthly_expense_entries ADD COLUMN IF NOT EXISTS branch VARCHAR(50) NOT NULL DEFAULT 'Common';",
         "CREATE INDEX IF NOT EXISTS idx_monthly_expense_entries_branch ON monthly_expense_entries(branch);",
         "ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS branch VARCHAR(50) NOT NULL DEFAULT 'Common';",
@@ -5817,6 +5820,10 @@ def _detect_file_type(filename: str, is_link: bool = False, url: str = "") -> st
     fn = filename.lower()
     if any(fn.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp"]):
         return "image"
+    if any(fn.endswith(ext) for ext in [".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v"]):
+        return "video"
+    if any(fn.endswith(ext) for ext in [".mp3", ".wav", ".ogg", ".m4a", ".aac"]):
+        return "audio"
     if fn.endswith(".pdf"):
         return "pdf"
     if any(fn.endswith(ext) for ext in [".ppt", ".pptx"]):
@@ -5847,7 +5854,7 @@ def get_monthly_attachments(module: str = "food", period_id: Optional[int] = Non
             params.append(branch)
 
         sql = f"""
-            SELECT id, module, period_id, branch, file_name, file_type, file_path, file_size, mime_type, is_link, uploaded_by, created_at
+            SELECT id, module, period_id, branch, file_name, file_type, file_path, file_size, mime_type, is_link, uploaded_by, COALESCE(topic, '') AS topic, created_at
             FROM monthly_attachments
             WHERE {' AND '.join(where_clauses)}
             ORDER BY created_at DESC;
@@ -5867,6 +5874,7 @@ def get_monthly_attachments(module: str = "food", period_id: Optional[int] = Non
                 "mime_type": r.get("mime_type") or "",
                 "is_link": bool(r.get("is_link")),
                 "uploaded_by": r.get("uploaded_by") or "User",
+                "topic": r.get("topic") or "",
                 "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"])
             })
 
@@ -5914,7 +5922,8 @@ async def upload_monthly_attachments(
     module: str = Form(...),
     period_id: int = Form(...),
     branch: Optional[str] = Form("Common"),
-    uploaded_by: Optional[str] = Form("User")
+    uploaded_by: Optional[str] = Form("User"),
+    topic: Optional[str] = Form("")
 ):
     """
     Uploads one or more files (image, pdf, ppt, excel, doc) for a specific monthly entry.
@@ -5945,10 +5954,10 @@ async def upload_monthly_attachments(
                     relative_url = f"/uploads/{saved_filename}"
 
                     cur.execute("""
-                        INSERT INTO monthly_attachments (module, period_id, branch, file_name, file_type, file_path, file_size, mime_type, is_link, uploaded_by)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, false, %s)
+                        INSERT INTO monthly_attachments (module, period_id, branch, file_name, file_type, file_path, file_size, mime_type, is_link, uploaded_by, topic)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, false, %s, %s)
                         RETURNING id, created_at;
-                    """, (module, period_id, branch or "Common", orig_name, file_type, relative_url, file_size, mime_type, uploaded_by or "User"))
+                    """, (module, period_id, branch or "Common", orig_name, file_type, relative_url, file_size, mime_type, uploaded_by or "User", (topic or "").strip()))
                     inserted = cur.fetchone()
                     conn.commit()
 
@@ -5964,6 +5973,7 @@ async def upload_monthly_attachments(
                         "mime_type": mime_type,
                         "is_link": False,
                         "uploaded_by": uploaded_by or "User",
+                        "topic": (topic or "").strip(),
                         "created_at": inserted[1].isoformat() if hasattr(inserted[1], "isoformat") else str(inserted[1])
                     })
             return {
@@ -5990,6 +6000,7 @@ class AttachmentLinkRequest(BaseModel):
     url: str
     title: str
     uploaded_by: Optional[str] = "User"
+    topic: Optional[str] = ""
 
 
 @app.post("/api/attachments/link")
@@ -6011,10 +6022,10 @@ def add_attachment_link(req: AttachmentLinkRequest):
         try:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO monthly_attachments (module, period_id, branch, file_name, file_type, file_path, file_size, mime_type, is_link, uploaded_by)
-                    VALUES (%s, %s, %s, %s, %s, %s, 0, 'text/uri-list', true, %s)
+                    INSERT INTO monthly_attachments (module, period_id, branch, file_name, file_type, file_path, file_size, mime_type, is_link, uploaded_by, topic)
+                    VALUES (%s, %s, %s, %s, %s, %s, 0, 'text/uri-list', true, %s, %s)
                     RETURNING id, created_at;
-                """, (req.module, req.period_id, req.branch or "Common", title, file_type, url, req.uploaded_by or "User"))
+                """, (req.module, req.period_id, req.branch or "Common", title, file_type, url, req.uploaded_by or "User", (req.topic or "").strip()))
                 row = cur.fetchone()
                 conn.commit()
 
@@ -6033,6 +6044,7 @@ def add_attachment_link(req: AttachmentLinkRequest):
                         "mime_type": "text/uri-list",
                         "is_link": True,
                         "uploaded_by": req.uploaded_by or "User",
+                        "topic": (req.topic or "").strip(),
                         "created_at": row[1].isoformat() if hasattr(row[1], "isoformat") else str(row[1])
                     }
                 }
@@ -6082,6 +6094,54 @@ def delete_attachment(attachment_id: int):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete attachment: {str(e)}")
+
+
+def _resolve_attachment_file(attachment_id: int):
+    row = db.execute_query(
+        "SELECT id, file_name, file_type, file_path, mime_type, is_link FROM monthly_attachments WHERE id = %s;",
+        (attachment_id,),
+        fetch_all=False
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    file_path = row.get("file_path") or ""
+    if row.get("is_link") or not file_path.startswith("/uploads/"):
+        raise HTTPException(status_code=400, detail="Attachment is an external link, not a local file")
+    saved_filename = os.path.basename(file_path)
+    up_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+    local_file = os.path.join(up_dir, saved_filename)
+    if not os.path.exists(local_file):
+        raise HTTPException(status_code=404, detail="Physical file not found on server")
+    mime_type = row.get("mime_type") or mimetypes.guess_type(row.get("file_name") or saved_filename)[0] or "application/octet-stream"
+    return row, local_file, mime_type
+
+
+@app.get("/api/attachments/{attachment_id}/download")
+def download_attachment_file(attachment_id: int):
+    """
+    Serves the exact binary file with Content-Disposition: attachment and original filename,
+    routed under /api/ so Vite and reverse proxies never return HTML fallback pages.
+    """
+    row, local_file, mime_type = _resolve_attachment_file(attachment_id)
+    return FileResponse(
+        path=local_file,
+        filename=row.get("file_name") or os.path.basename(local_file),
+        media_type=mime_type,
+        content_disposition_type="attachment"
+    )
+
+
+@app.get("/api/attachments/{attachment_id}/view")
+def view_attachment_file(attachment_id: int):
+    """
+    Serves the file inline for in-site media preview (images, PDFs, audio, video).
+    """
+    row, local_file, mime_type = _resolve_attachment_file(attachment_id)
+    return FileResponse(
+        path=local_file,
+        media_type=mime_type,
+        content_disposition_type="inline"
+    )
 
 
 @app.get("/api/attachments/{attachment_id}/slides")

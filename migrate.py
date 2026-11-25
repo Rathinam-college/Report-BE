@@ -425,6 +425,7 @@ MIGRATION_STEPS = [
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_monthly_attachments_module_period ON monthly_attachments(module, period_id);
+        ALTER TABLE monthly_attachments ADD COLUMN IF NOT EXISTS topic VARCHAR(255) DEFAULT '';
         """
     ),
     (

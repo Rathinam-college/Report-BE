@@ -1,5 +1,9 @@
 import sys
-from datetime import datetime
+import json
+import ast
+import re
+from decimal import Decimal
+from datetime import datetime, date
 import database as db
 
 def generate_sql_dump() -> str:
@@ -52,10 +56,13 @@ def generate_sql_dump() -> str:
                         vals.append("NULL")
                     elif isinstance(val, bool):
                         vals.append("TRUE" if val else "FALSE")
-                    elif isinstance(val, (int, float)):
+                    elif isinstance(val, (int, float, Decimal)):
                         vals.append(str(val))
-                    elif isinstance(val, datetime):
-                        vals.append(f"'{val.strftime('%Y-%m-%d %H:%M:%S')}'")
+                    elif isinstance(val, (dict, list)):
+                        cleaned = json.dumps(val, default=str).replace("'", "''")
+                        vals.append(f"'{cleaned}'")
+                    elif isinstance(val, (datetime, date)):
+                        vals.append(f"'{val.isoformat()}'")
                     else:
                         cleaned = str(val).replace("'", "''")
                         vals.append(f"'{cleaned}'")
@@ -77,12 +84,45 @@ def generate_sql_dump() -> str:
     return "\n".join(dump_lines)
 
 
+def _sanitize_legacy_python_json_in_sql(sql_text: str) -> str:
+    """
+    Converts legacy backup SQL literals that serialized Python dicts/lists via str(val)
+    (e.g. '{''key'': ''value''}') into valid JSON strings ('{"key": "value"}').
+    """
+    def _fix_literal(match):
+        raw_inner = match.group(1)
+        unescaped = raw_inner.replace("''", "'")
+        stripped = unescaped.lstrip()
+        if not stripped.startswith(("{", "[")):
+            return match.group(0)
+        # If it already parses as valid JSON, leave it alone
+        try:
+            json.loads(unescaped)
+            return match.group(0)
+        except Exception:
+            pass
+        # Try parsing as Python dict/list literal
+        try:
+            parsed = ast.literal_eval(unescaped)
+            if isinstance(parsed, (dict, list)):
+                valid_json = json.dumps(parsed, default=str).replace("'", "''")
+                return f"'{valid_json}'"
+        except Exception:
+            pass
+        return match.group(0)
+
+    # Match any SQL single-quoted string literal (handling '' escapes properly)
+    pattern = re.compile(r"'((?:[^']|'')*)'")
+    return pattern.sub(_fix_literal, sql_text)
+
+
 def restore_sql_dump(sql_text: str) -> dict:
     """Restores database by executing the provided SQL dump text."""
+    sanitized_sql = _sanitize_legacy_python_json_in_sql(sql_text)
     conn = db.get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(sql_text)
+            cur.execute(sanitized_sql)
             conn.commit()
             return {"status": "success", "message": "SQL dump executed and committed successfully."}
     except Exception as e:

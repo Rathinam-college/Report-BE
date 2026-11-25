@@ -1577,6 +1577,15 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
                     tot_additional_kms = 0.0
                     tot_diesel_litres = 0.0
                     tot_fuel_expenses = 0.0
+                    tot_fc_cost = 0.0
+                    tot_statutory_cost = 0.0
+                    tot_repair_maintenance_cost = 0.0
+                    tot_other_cost = 0.0
+                    tot_employee_cost = 0.0
+                    tot_parking_fastag = 0.0
+                    tot_cctv_replacement = 0.0
+                    tot_cab_billing = 0.0
+                    tot_total_expenses = 0.0
                     tot_fee_demand = 0.0
                     tot_fee_collected = 0.0
                     tot_fee_unpaid = 0.0
@@ -1602,6 +1611,15 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
                             tot_additional_kms += float(b_census.get("additional_kms") or 0.0)
                             tot_diesel_litres += float(b_census.get("diesel_litres") or 0.0)
                             tot_fuel_expenses += float(b_census.get("fuel_expenses") or 0.0)
+                            tot_fc_cost += float(b_census.get("fc_cost") or 0.0)
+                            tot_statutory_cost += float(b_census.get("statutory_cost") or 0.0)
+                            tot_repair_maintenance_cost += float(b_census.get("repair_maintenance_cost") or 0.0)
+                            tot_other_cost += float(b_census.get("other_cost") or 0.0)
+                            tot_employee_cost += float(b_census.get("employee_cost") or 0.0)
+                            tot_parking_fastag += float(b_census.get("parking_fastag") or 0.0)
+                            tot_cctv_replacement += float(b_census.get("cctv_replacement") or 0.0)
+                            tot_cab_billing += float(b_census.get("cab_billing") or 0.0)
+                            tot_total_expenses += float(b_census.get("total_expenses") or 0.0)
                             tot_fee_demand += float(b_census.get("fee_demand") or 0.0)
                             tot_fee_collected += float(b_census.get("fee_collected") or 0.0)
                             tot_fee_unpaid += float(b_census.get("fee_unpaid") or 0.0)
@@ -1623,6 +1641,15 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
                             "additional_kms": round(tot_additional_kms, 2),
                             "diesel_litres": round(tot_diesel_litres, 2),
                             "fuel_expenses": round(tot_fuel_expenses, 2),
+                            "fc_cost": round(tot_fc_cost, 2),
+                            "statutory_cost": round(tot_statutory_cost, 2),
+                            "repair_maintenance_cost": round(tot_repair_maintenance_cost, 2),
+                            "other_cost": round(tot_other_cost, 2),
+                            "employee_cost": round(tot_employee_cost, 2),
+                            "parking_fastag": round(tot_parking_fastag, 2),
+                            "cctv_replacement": round(tot_cctv_replacement, 2),
+                            "cab_billing": round(tot_cab_billing, 2),
+                            "total_expenses": round(tot_total_expenses, 2),
                             "fee_demand": round(tot_fee_demand, 2),
                             "fee_collected": round(tot_fee_collected, 2),
                             "fee_unpaid": round(tot_fee_unpaid, 2),

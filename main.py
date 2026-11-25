@@ -1678,6 +1678,35 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
             except Exception as ce:
                 print(f"[CCTV Matrix Query Notice] {ce}")
 
+        # Query Transport Fleet Sanctioned Branch Budgets
+        transport_branch_budgets = {}
+        if module in ("transport", "all", None):
+            try:
+                t_budgets_rows = db.execute_query("SELECT * FROM transport_budget_tracking ORDER BY branch, display_order ASC;")
+                for r in t_budgets_rows:
+                    b = r.get("branch")
+                    if b not in transport_branch_budgets:
+                        transport_branch_budgets[b] = {
+                            "branch": b,
+                            "sanctioned": 0.0,
+                            "lineItems": []
+                        }
+                    item = {
+                        "id": r.get("id"),
+                        "param": r.get("param_name"),
+                        "amount": float(r.get("sanctioned_amount") or 0.0),
+                        "order": r.get("display_order"),
+                        "color": r.get("color"),
+                        "bg": r.get("bg"),
+                        "isTotal": bool(r.get("is_total")),
+                        "isBlank": bool(r.get("is_blank"))
+                    }
+                    transport_branch_budgets[b]["lineItems"].append(item)
+                    if item["isTotal"]:
+                        transport_branch_budgets[b]["sanctioned"] = item["amount"]
+            except Exception as tbe:
+                print(f"[Transport Budget Matrix Query Notice] {tbe}")
+
         return {
             "periods": periods,
             "categories": categories_data,
@@ -1688,6 +1717,7 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
             "food_budget_tracking": food_budget_tracking_data if (module in ('food', 'all', None) or food_budget_tracking_data) else None,
             "transport_census": transport_census_data,
             "transport_census_by_branch": transport_census_by_branch if module == "transport" else None,
+            "transport_branch_budgets": transport_branch_budgets if module in ("transport", "all", None) else None,
             "matrix_by_branch": matrix_by_branch if module == "transport" else None,
             "branches": ["all", "RPS", "KPM", "Common", "University"] if module == "transport" else None,
             "active_branch": branch or "all",
@@ -3501,11 +3531,14 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
     fc_cost = float(_clean_num(get_f("fc_cost", 0.0)))
     statutory_cost = float(_clean_num(get_f("statutory_cost", 0.0)))
     repair_maintenance_cost = float(_clean_num(get_f("repair_maintenance_cost", 0.0)))
-    employee_cost = float(_clean_num(get_f("employee_cost", 0.0)))
     other_cost = float(_clean_num(get_f("other_cost", 0.0)))
+    cctv_replacement = float(_clean_num(get_f("cctv_replacement", 0.0)))
+    employee_cost = float(_clean_num(get_f("employee_cost", 0.0)))
+    parking_fastag = float(_clean_num(get_f("parking_fastag", 0.0)))
 
-    # Row 15: Total Expenses = SUM(fuel + fc + statutory + repair + employee + other)
-    total_expenses = fuel_expenses + fc_cost + statutory_cost + repair_maintenance_cost + employee_cost + other_cost
+    # Row 16: Total Expenses = SUM(fuel + fc + statutory + repair + other + cctv + employee + parking)
+    total_expenses = (fuel_expenses + fc_cost + statutory_cost + repair_maintenance_cost + 
+                      other_cost + cctv_replacement + employee_cost + parking_fastag)
 
     fee_demand = float(_clean_num(get_f("fee_demand", 0.0)))
     fee_discount = float(_clean_num(get_f("fee_discount", 0.0)))
@@ -3521,7 +3554,13 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
     cumulative_income = (fee_collected + rps_monthly_billing + staff_travel_deduction + 
                          additional_kms_billed_rps + additional_kms_others_billing + cab_billing)
 
-    approved_budget = float(_clean_num(get_f("approved_budget", 13730137.73)))
+    branch_default_budget = {
+        "University": 40330187.0,
+        "RPS": 14107491.0,
+        "KPM": 4000000.0,
+        "Common": 5552143.0,
+    }.get(b_val, 4000000.0)
+    approved_budget = float(_clean_num(get_f("approved_budget", branch_default_budget)))
     cumulative_budget_spent = float(_clean_num(get_f("cumulative_budget_spent", 0.0)))
     if cumulative_budget_spent == 0.0 and total_expenses > 0.0:
         cumulative_budget_spent = total_expenses
@@ -3552,7 +3591,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         period_id, branch, vehicles_count, passengers_count, students_count, staff_count,
         approved_kms, actual_kms, additional_kms, excess_kms_rps, excess_km_billed_rps,
         fuel_expenses, diesel_litres, fc_cost, statutory_cost,
-        repair_maintenance_cost, employee_cost, other_cost, total_expenses,
+        repair_maintenance_cost, other_cost, cctv_replacement, employee_cost, parking_fastag, total_expenses,
         fee_demand, fee_discount, fee_collected, fee_unpaid,
         rps_monthly_billing, staff_travel_deduction, additional_kms_billed_rps, additional_kms_others_billing, cab_billing, cumulative_income,
         approved_budget, cumulative_budget_spent, balance,
@@ -3565,7 +3604,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         %s, %s, %s, %s, %s, %s,
         %s, %s, %s, %s, %s,
         %s, %s, %s, %s,
-        %s, %s, %s, %s,
+        %s, %s, %s, %s, %s, %s,
         %s, %s, %s, %s,
         %s, %s, %s, %s, %s, %s,
         %s, %s, %s,
@@ -3590,8 +3629,10 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         fc_cost = EXCLUDED.fc_cost,
         statutory_cost = EXCLUDED.statutory_cost,
         repair_maintenance_cost = EXCLUDED.repair_maintenance_cost,
-        employee_cost = EXCLUDED.employee_cost,
         other_cost = EXCLUDED.other_cost,
+        cctv_replacement = EXCLUDED.cctv_replacement,
+        employee_cost = EXCLUDED.employee_cost,
+        parking_fastag = EXCLUDED.parking_fastag,
         total_expenses = EXCLUDED.total_expenses,
         fee_demand = EXCLUDED.fee_demand,
         fee_discount = EXCLUDED.fee_discount,
@@ -3626,7 +3667,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         period_id, b_val, vehicles_count, passengers_count, students_count, staff_count,
         approved_kms, actual_kms, additional_kms, excess_kms_rps, excess_km_billed_rps,
         fuel_expenses, diesel_litres, fc_cost, statutory_cost,
-        repair_maintenance_cost, employee_cost, other_cost, total_expenses,
+        repair_maintenance_cost, other_cost, cctv_replacement, employee_cost, parking_fastag, total_expenses,
         fee_demand, fee_discount, fee_collected, fee_unpaid,
         rps_monthly_billing, staff_travel_deduction, additional_kms_billed_rps, additional_kms_others_billing, cab_billing, cumulative_income,
         approved_budget, cumulative_budget_spent, balance,
@@ -3941,11 +3982,14 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
     fc_cost = float(_clean_num(get_f("fc_cost", 0.0)))
     statutory_cost = float(_clean_num(get_f("statutory_cost", 0.0)))
     repair_maintenance_cost = float(_clean_num(get_f("repair_maintenance_cost", 0.0)))
-    employee_cost = float(_clean_num(get_f("employee_cost", 0.0)))
     other_cost = float(_clean_num(get_f("other_cost", 0.0)))
+    cctv_replacement = float(_clean_num(get_f("cctv_replacement", 0.0)))
+    employee_cost = float(_clean_num(get_f("employee_cost", 0.0)))
+    parking_fastag = float(_clean_num(get_f("parking_fastag", 0.0)))
 
-    # Row 15: Total Expenses = SUM(fuel + fc + statutory + repair + employee + other)
-    total_expenses = fuel_expenses + fc_cost + statutory_cost + repair_maintenance_cost + employee_cost + other_cost
+    # Row 16: Total Expenses = SUM(fuel + fc + statutory + repair + other + cctv + employee + parking)
+    total_expenses = (fuel_expenses + fc_cost + statutory_cost + repair_maintenance_cost + 
+                      other_cost + cctv_replacement + employee_cost + parking_fastag)
 
     fee_demand = float(_clean_num(get_f("fee_demand", 0.0)))
     fee_discount = float(_clean_num(get_f("fee_discount", 0.0)))
@@ -3961,7 +4005,13 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
     cumulative_income = (fee_collected + rps_monthly_billing + staff_travel_deduction + 
                          additional_kms_billed_rps + additional_kms_others_billing + cab_billing)
 
-    approved_budget = float(_clean_num(get_f("approved_budget", 13730137.73)))
+    branch_default_budget = {
+        "University": 40330187.0,
+        "RPS": 14107491.0,
+        "KPM": 4000000.0,
+        "Common": 5552143.0,
+    }.get(b_val, 4000000.0)
+    approved_budget = float(_clean_num(get_f("approved_budget", branch_default_budget)))
     cumulative_budget_spent = float(_clean_num(get_f("cumulative_budget_spent", 0.0)))
     if cumulative_budget_spent == 0.0 and total_expenses > 0.0:
         cumulative_budget_spent = total_expenses
@@ -3992,7 +4042,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         period_id, branch, vehicles_count, passengers_count, students_count, staff_count,
         approved_kms, actual_kms, additional_kms, excess_kms_rps, excess_km_billed_rps,
         fuel_expenses, diesel_litres, fc_cost, statutory_cost,
-        repair_maintenance_cost, employee_cost, other_cost, total_expenses,
+        repair_maintenance_cost, other_cost, cctv_replacement, employee_cost, parking_fastag, total_expenses,
         fee_demand, fee_discount, fee_collected, fee_unpaid,
         rps_monthly_billing, staff_travel_deduction, additional_kms_billed_rps, additional_kms_others_billing, cab_billing, cumulative_income,
         approved_budget, cumulative_budget_spent, balance,
@@ -4005,7 +4055,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         %s, %s, %s, %s, %s, %s,
         %s, %s, %s, %s, %s,
         %s, %s, %s, %s,
-        %s, %s, %s, %s,
+        %s, %s, %s, %s, %s, %s,
         %s, %s, %s, %s,
         %s, %s, %s, %s, %s, %s,
         %s, %s, %s,
@@ -4030,8 +4080,10 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         fc_cost = EXCLUDED.fc_cost,
         statutory_cost = EXCLUDED.statutory_cost,
         repair_maintenance_cost = EXCLUDED.repair_maintenance_cost,
-        employee_cost = EXCLUDED.employee_cost,
         other_cost = EXCLUDED.other_cost,
+        cctv_replacement = EXCLUDED.cctv_replacement,
+        employee_cost = EXCLUDED.employee_cost,
+        parking_fastag = EXCLUDED.parking_fastag,
         total_expenses = EXCLUDED.total_expenses,
         fee_demand = EXCLUDED.fee_demand,
         fee_discount = EXCLUDED.fee_discount,
@@ -4066,7 +4118,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         period_id, b_val, vehicles_count, passengers_count, students_count, staff_count,
         approved_kms, actual_kms, additional_kms, excess_kms_rps, excess_km_billed_rps,
         fuel_expenses, diesel_litres, fc_cost, statutory_cost,
-        repair_maintenance_cost, employee_cost, other_cost, total_expenses,
+        repair_maintenance_cost, other_cost, cctv_replacement, employee_cost, parking_fastag, total_expenses,
         fee_demand, fee_discount, fee_collected, fee_unpaid,
         rps_monthly_billing, staff_travel_deduction, additional_kms_billed_rps, additional_kms_others_billing, cab_billing, cumulative_income,
         approved_budget, cumulative_budget_spent, balance,
@@ -4425,6 +4477,279 @@ def get_transport_branches():
         ]
     }
 
+@app.get("/api/transport/budget-tracking")
+def get_transport_budget_tracking(branch: Optional[str] = None):
+    """
+    Returns the official Sanctioned Budget Parameters & Allocation per operating fleet branch directly from PostgreSQL.
+    """
+    try:
+        sql = "SELECT * FROM transport_budget_tracking"
+        params = []
+        if branch and branch != "all":
+            sql += " WHERE branch = %s"
+            params.append(branch)
+        sql += " ORDER BY branch, display_order ASC;"
+        
+        rows = db.execute_query(sql, tuple(params) if params else None)
+        
+        budgets = {}
+        for r in rows:
+            b = r.get("branch")
+            if b not in budgets:
+                budgets[b] = {
+                    "branch": b,
+                    "sanctioned": 0.0,
+                    "lineItems": []
+                }
+            item = {
+                "id": r.get("id"),
+                "param": r.get("param_name"),
+                "amount": float(r.get("sanctioned_amount") or 0.0),
+                "order": r.get("display_order"),
+                "color": r.get("color"),
+                "bg": r.get("bg"),
+                "isTotal": bool(r.get("is_total")),
+                "isBlank": bool(r.get("is_blank"))
+            }
+            budgets[b]["lineItems"].append(item)
+            if item["isTotal"]:
+                budgets[b]["sanctioned"] = item["amount"]
+                
+        return {
+            "status": "success",
+            "budgets": budgets,
+            "branch": branch
+        }
+    except Exception as e:
+        print(f"[get_transport_budget_tracking Error] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/transport/budget-tracking")
+def update_transport_budget_tracking(req: Dict[str, Any]):
+    """
+    Updates the Sanctioned Budget parameter amounts for a specific branch or bulk branches.
+    Auto-computes Total Expenses, updates both transport_budget_tracking and dedicated per-fleet
+    tables (transport_budget_rps, transport_budget_kpm, transport_budget_common, transport_budget_university),
+    and syncs approved_budget and balance to transport_census_entries.
+    """
+    conn = db.get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            all_budgets = req.get("budgets")
+            if all_budgets and isinstance(all_budgets, dict):
+                # Bulk update across multiple or all branches
+                updated_branches = {}
+                for b_name, b_info in all_budgets.items():
+                    if isinstance(b_info, list):
+                        items = b_info
+                    elif isinstance(b_info, dict):
+                        items = b_info if isinstance(b_info, list) else (b_info.get("lineItems") or b_info.get("line_items") or [])
+                    else:
+                        items = []
+                    if not items:
+                        continue
+                    c_total = sum(float(_clean_num(it.get("amount", 0.0))) for it in items if not (it.get("isTotal") or it.get("is_total")))
+                    
+                    # Update consolidated table
+                    for it in items:
+                        p_name = it.get("param") or it.get("param_name")
+                        is_tot = bool(it.get("isTotal") or it.get("is_total"))
+                        is_blk = bool(it.get("isBlank") or it.get("is_blank"))
+                        amt = c_total if is_tot else float(_clean_num(it.get("amount", 0.0)))
+                        cur.execute("""
+                            INSERT INTO transport_budget_tracking (
+                                branch, param_name, sanctioned_amount, display_order, color, bg, is_total, is_blank, updated_at
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                            ON CONFLICT (branch, param_name) DO UPDATE SET
+                                sanctioned_amount = EXCLUDED.sanctioned_amount,
+                                color = COALESCE(EXCLUDED.color, transport_budget_tracking.color),
+                                bg = COALESCE(EXCLUDED.bg, transport_budget_tracking.bg),
+                                updated_at = CURRENT_TIMESTAMP;
+                        """, (
+                            b_name, p_name, amt,
+                            int(it.get("order") or it.get("display_order") or 1),
+                            it.get("color") or "#3b82f6", it.get("bg") or "#eff6ff", is_tot, is_blk
+                        ))
+                    
+                    # Update dedicated per-fleet table
+                    ded_tbl = f"transport_budget_{b_name.lower()}"
+                    try:
+                        for it in items:
+                            p_name = it.get("param") or it.get("param_name")
+                            is_tot = bool(it.get("isTotal") or it.get("is_total"))
+                            is_blk = bool(it.get("isBlank") or it.get("is_blank"))
+                            amt = c_total if is_tot else float(_clean_num(it.get("amount", 0.0)))
+                            cur.execute(f"""
+                                INSERT INTO {ded_tbl} (
+                                    param_name, sanctioned_amount, display_order, color, bg, is_total, is_blank, updated_at
+                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                                ON CONFLICT (param_name) DO UPDATE SET
+                                    sanctioned_amount = EXCLUDED.sanctioned_amount,
+                                    color = COALESCE(EXCLUDED.color, {ded_tbl}.color),
+                                    bg = COALESCE(EXCLUDED.bg, {ded_tbl}.bg),
+                                    updated_at = CURRENT_TIMESTAMP;
+                            """, (
+                                p_name, amt,
+                                int(it.get("order") or it.get("display_order") or 1),
+                                it.get("color") or "#3b82f6", it.get("bg") or "#eff6ff", is_tot, is_blk
+                            ))
+                    except Exception as de:
+                        print(f"[{ded_tbl} bulk sync notice] {de}")
+                    
+                    # Update transport_census_entries
+                    cur.execute("""
+                        UPDATE transport_census_entries
+                        SET approved_budget = %s,
+                            balance = %s - cumulative_budget_spent
+                        WHERE branch = %s;
+                    """, (c_total, c_total, b_name))
+                    updated_branches[b_name] = c_total
+                
+                conn.commit()
+                return {
+                    "status": "success",
+                    "message": f"Successfully updated and saved all fleet budget tables: {list(updated_branches.keys())}",
+                    "updated_branches": updated_branches
+                }
+
+            # Single branch update
+            branch = req.get("branch")
+            line_items = req.get("lineItems") or req.get("line_items") or []
+            
+            if not branch or branch == "all":
+                raise HTTPException(status_code=400, detail="Specific branch required (University, RPS, KPM, Common)")
+            
+            if not line_items:
+                raise HTTPException(status_code=400, detail="lineItems list is required")
+                
+            # 1. Calculate new total from non-total items
+            computed_total = 0.0
+            for item in line_items:
+                is_total = bool(item.get("isTotal") or item.get("is_total"))
+                if not is_total:
+                    amt = float(_clean_num(item.get("amount", 0.0)))
+                    computed_total += amt
+            
+            # 2. Update each line item in consolidated transport_budget_tracking
+            for item in line_items:
+                p_name = item.get("param") or item.get("param_name")
+                is_total = bool(item.get("isTotal") or item.get("is_total"))
+                is_blank = bool(item.get("isBlank") or item.get("is_blank"))
+                amt = computed_total if is_total else float(_clean_num(item.get("amount", 0.0)))
+                    
+                cur.execute("""
+                    INSERT INTO transport_budget_tracking (
+                        branch, param_name, sanctioned_amount, display_order, color, bg, is_total, is_blank, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (branch, param_name) DO UPDATE SET
+                        sanctioned_amount = EXCLUDED.sanctioned_amount,
+                        color = COALESCE(EXCLUDED.color, transport_budget_tracking.color),
+                        bg = COALESCE(EXCLUDED.bg, transport_budget_tracking.bg),
+                        updated_at = CURRENT_TIMESTAMP;
+                """, (
+                    branch,
+                    p_name,
+                    amt,
+                    int(item.get("order") or item.get("display_order") or 1),
+                    item.get("color") or "#3b82f6",
+                    item.get("bg") or "#eff6ff",
+                    is_total,
+                    is_blank
+                ))
+            
+            # 2b. Update dedicated per-fleet table: transport_budget_<branch>
+            dedicated_tbl = f"transport_budget_{branch.lower()}"
+            try:
+                for item in line_items:
+                    p_name = item.get("param") or item.get("param_name")
+                    is_total = bool(item.get("isTotal") or item.get("is_total"))
+                    is_blank = bool(item.get("isBlank") or item.get("is_blank"))
+                    amt = computed_total if is_total else float(_clean_num(item.get("amount", 0.0)))
+                    cur.execute(f"""
+                        INSERT INTO {dedicated_tbl} (
+                            param_name, sanctioned_amount, display_order, color, bg, is_total, is_blank, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                        ON CONFLICT (param_name) DO UPDATE SET
+                            sanctioned_amount = EXCLUDED.sanctioned_amount,
+                            color = COALESCE(EXCLUDED.color, {dedicated_tbl}.color),
+                            bg = COALESCE(EXCLUDED.bg, {dedicated_tbl}.bg),
+                            updated_at = CURRENT_TIMESTAMP;
+                    """, (
+                        p_name,
+                        amt,
+                        int(item.get("order") or item.get("display_order") or 1),
+                        item.get("color") or "#3b82f6",
+                        item.get("bg") or "#eff6ff",
+                        is_total,
+                        is_blank
+                    ))
+            except Exception as de:
+                print(f"[{dedicated_tbl} sync notice] {de}")
+
+            # 3. Synchronize new approved_budget to transport_census_entries for this branch
+            cur.execute("""
+                UPDATE transport_census_entries
+                SET approved_budget = %s,
+                    balance = %s - cumulative_budget_spent
+                WHERE branch = %s;
+            """, (computed_total, computed_total, branch))
+            
+            conn.commit()
+            
+            return {
+                "status": "success",
+                "message": f"Successfully updated and locked budget in dedicated table {dedicated_tbl} and transport_budget_tracking (New Sanctioned Total: ₹{computed_total:,.2f})",
+                "branch": branch,
+                "sanctioned": computed_total,
+                "table_name": dedicated_tbl
+            }
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f"[update_transport_budget_tracking Error] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.release_db_connection(conn)
+
+@app.get("/api/transport/budget/{branch_name}")
+def get_dedicated_branch_budget_table(branch_name: str):
+    """
+    Returns the budget parameters directly from the dedicated per-fleet table
+    (transport_budget_rps, transport_budget_kpm, transport_budget_common, transport_budget_university).
+    """
+    clean_b = branch_name.lower().strip()
+    table_name = f"transport_budget_{clean_b}"
+    try:
+        rows = db.execute_query(f"SELECT * FROM {table_name} ORDER BY display_order ASC;")
+        items = []
+        sanctioned_total = 0.0
+        for r in rows:
+            it = {
+                "id": r.get("id"),
+                "param": r.get("param_name"),
+                "amount": float(r.get("sanctioned_amount") or 0.0),
+                "order": r.get("display_order"),
+                "color": r.get("color"),
+                "bg": r.get("bg"),
+                "isTotal": bool(r.get("is_total")),
+                "isBlank": bool(r.get("is_blank"))
+            }
+            items.append(it)
+            if it["isTotal"]:
+                sanctioned_total = it["amount"]
+                
+        return {
+            "status": "success",
+            "branch": branch_name,
+            "table_name": table_name,
+            "sanctioned": sanctioned_total,
+            "lineItems": items
+        }
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Table {table_name} not found or query error: {str(e)}")
+
 @app.get("/api/transport-census/{period_id}")
 def get_transport_census_direct(period_id: int, branch: Optional[str] = "Common"):
     """
@@ -4565,6 +4890,7 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
                            SUM(statutory_cost) AS statutory_cost, 
                            SUM(repair_maintenance) AS repair_maintenance, 
                            SUM(parking_fastag) AS parking_fastag, 
+                           SUM(cctv_replacement) AS cctv_replacement, 
                            SUM(employee_cost) AS employee_cost, 
                            SUM(other_cost) AS other_cost, 
                            SUM(total_expenses) AS total_expenses, 
@@ -4585,6 +4911,7 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
                            SUM(statutory_cost) AS statutory_cost, 
                            SUM(repair_maintenance) AS repair_maintenance, 
                            SUM(parking_fastag) AS parking_fastag, 
+                           SUM(cctv_replacement) AS cctv_replacement, 
                            SUM(employee_cost) AS employee_cost, 
                            SUM(other_cost) AS other_cost, 
                            SUM(total_expenses) AS total_expenses, 
@@ -4592,7 +4919,7 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
                            SUM(km_run) AS km_run, 
                            MIN(display_order) AS display_order
                     FROM transport_vehicle_entries
-                    WHERE branch = %s
+                    WHERE LOWER(branch) = LOWER(%s)
                     GROUP BY branch, vehicle_no, make, model
                     ORDER BY MIN(display_order), vehicle_no;
                     """,
@@ -4618,6 +4945,7 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
             tot_stat = sum(r.get("statutory_cost", 0) for r in clean_rows)
             tot_rep = sum(r.get("repair_maintenance", 0) for r in clean_rows)
             tot_park = sum(r.get("parking_fastag", 0) for r in clean_rows)
+            tot_cctv = sum(r.get("cctv_replacement", 0) for r in clean_rows)
             tot_emp = sum(r.get("employee_cost", 0) for r in clean_rows)
             tot_oth = sum(r.get("other_cost", 0) for r in clean_rows)
             tot_exp = sum(r.get("total_expenses", 0) for r in clean_rows)
@@ -4632,6 +4960,7 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
                 "statutory_cost": tot_stat,
                 "repair_maintenance": tot_rep,
                 "parking_fastag": tot_park,
+                "cctv_replacement": tot_cctv,
                 "employee_cost": tot_emp,
                 "other_cost": tot_oth,
                 "total_expenses": tot_exp,
@@ -4649,24 +4978,71 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
                 "branch_summaries": {}
             }
 
-        # Otherwise single period
-        numeric_period_id = int(period_id) if period_id else None
-        if not numeric_period_id:
-            latest_p = db.execute_query(
-                "SELECT id FROM billing_periods WHERE module = 'transport' ORDER BY start_date DESC LIMIT 1;",
+        # Otherwise single period - Smart Resolution
+        numeric_period_id = None
+        if period_id and str(period_id).isdigit():
+            numeric_period_id = int(period_id)
+
+        # Check if the requested period_id actually has entries in transport_vehicle_entries for this branch
+        has_entries = False
+        if numeric_period_id:
+            check_veh = db.execute_query(
+                "SELECT 1 FROM transport_vehicle_entries WHERE period_id = %s AND (LOWER(%s) = 'all' OR LOWER(branch) = LOWER(%s)) LIMIT 1;",
+                (numeric_period_id, b_filter, b_filter),
                 fetch_all=False
             )
-            if latest_p:
-                numeric_period_id = latest_p["id"]
+            if check_veh:
+                has_entries = True
             else:
-                return {"status": "success", "vehicles": [], "summary": {}, "branch_summaries": {}}
+                # If numeric_period_id is from another module (e.g. 311 for Oct'26), find matching transport period
+                p_info = db.execute_query(
+                    "SELECT period_label FROM billing_periods WHERE id = %s;",
+                    (numeric_period_id,),
+                    fetch_all=False
+                )
+                if p_info and p_info.get("period_label"):
+                    target_lbl = p_info["period_label"]
+                    matching_p = db.execute_query(
+                        """
+                        SELECT bp.id 
+                        FROM billing_periods bp
+                        JOIN transport_vehicle_entries tve ON tve.period_id = bp.id
+                        WHERE bp.period_label = %s AND (LOWER(%s) = 'all' OR LOWER(tve.branch) = LOWER(%s))
+                        LIMIT 1;
+                        """,
+                        (target_lbl, b_filter, b_filter),
+                        fetch_all=False
+                    )
+                    if matching_p:
+                        numeric_period_id = matching_p["id"]
+                        has_entries = True
+
+        # Fallback: Pick the latest transport period with vehicle entries AND diesel > 0
+        if not has_entries:
+            latest_with_data = db.execute_query(
+                """
+                SELECT bp.id 
+                FROM billing_periods bp
+                JOIN transport_vehicle_entries tve ON tve.period_id = bp.id
+                WHERE (LOWER(%s) = 'all' OR LOWER(tve.branch) = LOWER(%s)) AND tve.diesel_litres > 0
+                GROUP BY bp.id, bp.start_date
+                ORDER BY bp.start_date DESC
+                LIMIT 1;
+                """,
+                (b_filter, b_filter),
+                fetch_all=False
+            )
+            if latest_with_data:
+                numeric_period_id = latest_with_data["id"]
+            else:
+                numeric_period_id = 1026
 
         if b_filter == "all":
             rows = db.execute_query(
                 """
                 SELECT id, period_id, branch, vehicle_no, make, model, 
                        fuel_expenses, fc_cost, statutory_cost, repair_maintenance, 
-                       parking_fastag, employee_cost, other_cost, total_expenses, 
+                       parking_fastag, cctv_replacement, employee_cost, other_cost, total_expenses, 
                        diesel_litres, km_run, mileage, display_order, remarks, created_at
                 FROM transport_vehicle_entries
                 WHERE period_id = %s
@@ -4679,10 +5055,10 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
                 """
                 SELECT id, period_id, branch, vehicle_no, make, model, 
                        fuel_expenses, fc_cost, statutory_cost, repair_maintenance, 
-                       parking_fastag, employee_cost, other_cost, total_expenses, 
+                       parking_fastag, cctv_replacement, employee_cost, other_cost, total_expenses, 
                        diesel_litres, km_run, mileage, display_order, remarks, created_at
                 FROM transport_vehicle_entries
-                WHERE period_id = %s AND branch = %s
+                WHERE period_id = %s AND LOWER(branch) = LOWER(%s)
                 ORDER BY display_order, id;
                 """,
                 (numeric_period_id, b_filter)
@@ -4706,6 +5082,7 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
         tot_stat = sum(r.get("statutory_cost", 0) for r in clean_rows)
         tot_rep = sum(r.get("repair_maintenance", 0) for r in clean_rows)
         tot_park = sum(r.get("parking_fastag", 0) for r in clean_rows)
+        tot_cctv = sum(r.get("cctv_replacement", 0) for r in clean_rows)
         tot_emp = sum(r.get("employee_cost", 0) for r in clean_rows)
         tot_oth = sum(r.get("other_cost", 0) for r in clean_rows)
         tot_exp = sum(r.get("total_expenses", 0) for r in clean_rows)
@@ -4720,6 +5097,7 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
             "statutory_cost": tot_stat,
             "repair_maintenance": tot_rep,
             "parking_fastag": tot_park,
+            "cctv_replacement": tot_cctv,
             "employee_cost": tot_emp,
             "other_cost": tot_oth,
             "total_expenses": tot_exp,
@@ -4731,7 +5109,7 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
         # Branch summaries for badges
         all_period_rows = db.execute_query(
             "SELECT branch, vehicle_no, total_expenses, diesel_litres, km_run FROM transport_vehicle_entries WHERE period_id = %s;",
-            (period_id,)
+            (numeric_period_id,)
         )
         branches = ["Common", "RPS", "KPM", "University"]
         branch_summaries = {}
@@ -4748,7 +5126,7 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
         }
 
         for b in branches:
-            b_rows = [r for r in all_period_rows if r.get("branch") == b]
+            b_rows = [r for r in all_period_rows if str(r.get("branch")).lower() == b.lower()]
             b_cnt = len(b_rows)
             b_e = sum(float(r["total_expenses"] or 0) for r in b_rows)
             b_d = sum(float(r["diesel_litres"] or 0) for r in b_rows)
@@ -4763,7 +5141,7 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
 
         return {
             "status": "success",
-            "period_id": period_id,
+            "period_id": numeric_period_id,
             "branch": b_filter,
             "vehicles": clean_rows,
             "summary": summary,
@@ -4787,6 +5165,16 @@ def save_transport_vehicles(req: Dict[str, Any]):
         if branch == "all":
             raise HTTPException(status_code=400, detail="Cannot save vehicles under 'all' consolidated view. Select a specific branch (RPS, KPM, University, or Common).")
 
+        # Guard: check if period is locked
+        check_closed = db.execute_query(
+            "SELECT is_closed, period_label FROM billing_periods WHERE id = %s;",
+            (period_id,),
+            fetch_all=False
+        )
+        if check_closed and check_closed.get("is_closed"):
+            p_lbl = check_closed.get("period_label") or f"#{period_id}"
+            raise HTTPException(status_code=400, detail=f"Billing month {p_lbl} is locked (read-only). Please unlock it before modifying vehicle records.")
+
         conn = db.get_db_connection()
         try:
             with conn.cursor() as cur:
@@ -4801,6 +5189,7 @@ def save_transport_vehicles(req: Dict[str, Any]):
                 tot_stat = 0.0
                 tot_rep = 0.0
                 tot_park = 0.0
+                tot_cctv = 0.0
                 tot_emp = 0.0
                 tot_oth = 0.0
                 tot_diesel = 0.0
@@ -4810,9 +5199,9 @@ def save_transport_vehicles(req: Dict[str, Any]):
                 INSERT INTO transport_vehicle_entries (
                     period_id, branch, vehicle_no, make, model, 
                     fuel_expenses, fc_cost, statutory_cost, repair_maintenance, 
-                    parking_fastag, employee_cost, other_cost, total_expenses, 
+                    parking_fastag, cctv_replacement, employee_cost, other_cost, total_expenses, 
                     diesel_litres, km_run, mileage, display_order, remarks
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id;
                 """
 
@@ -4830,12 +5219,13 @@ def save_transport_vehicles(req: Dict[str, Any]):
                     stat = float(_clean_num(v.get("statutory_cost", 0)))
                     rep = float(_clean_num(v.get("repair_maintenance", 0)))
                     park = float(_clean_num(v.get("parking_fastag", 0)))
+                    cctv = float(_clean_num(v.get("cctv_replacement", 0)))
                     emp = float(_clean_num(v.get("employee_cost", 0)))
                     oth = float(_clean_num(v.get("other_cost", 0)))
                     diesel = float(_clean_num(v.get("diesel_litres", 0)))
                     km = float(_clean_num(v.get("km_run", 0)))
 
-                    row_tot = fuel + fc + stat + rep + park + emp + oth
+                    row_tot = fuel + fc + stat + rep + park + cctv + emp + oth
                     row_mila = round(km / diesel, 2) if diesel > 0 else 0.0
 
                     tot_fuel += fuel
@@ -4843,6 +5233,7 @@ def save_transport_vehicles(req: Dict[str, Any]):
                     tot_stat += stat
                     tot_rep += rep
                     tot_park += park
+                    tot_cctv += cctv
                     tot_emp += emp
                     tot_oth += oth
                     tot_diesel += diesel
@@ -4850,7 +5241,7 @@ def save_transport_vehicles(req: Dict[str, Any]):
 
                     cur.execute(ins_sql, (
                         period_id, branch, v_no, make, model,
-                        fuel, fc, stat, rep, park, emp, oth, row_tot,
+                        fuel, fc, stat, rep, park, cctv, emp, oth, row_tot,
                         diesel, km, row_mila, order, remarks
                     ))
                     r_id = cur.fetchone()[0]
@@ -4858,19 +5249,20 @@ def save_transport_vehicles(req: Dict[str, Any]):
 
                 # 2. Sync to transport_census_entries
                 bus_count = len(vehicles)
-                tot_exp = tot_fuel + tot_fc + tot_stat + tot_rep + tot_park + tot_emp + tot_oth
+                tot_exp = tot_fuel + tot_fc + tot_stat + tot_rep + tot_park + tot_cctv + tot_emp + tot_oth
                 census_update = {
                     "vehicles_count": f"{bus_count} Buses" if bus_count > 0 else "0",
                     "fuel_expenses": tot_fuel,
                     "fc_cost": tot_fc,
                     "statutory_cost": tot_stat,
                     "repair_maintenance_cost": tot_rep,
+                    "parking_fastag": tot_park,
+                    "cctv_replacement": tot_cctv,
                     "employee_cost": tot_emp,
                     "other_cost": tot_oth,
                     "total_expenses": tot_exp,
                     "diesel_litres": tot_diesel,
-                    "actual_kms": tot_km,
-                    "parking_fastag": tot_park
+                    "actual_kms": tot_km
                 }
                 compute_and_upsert_transport_census(cur, period_id, census_update, branch=branch)
 
@@ -4915,6 +5307,16 @@ def delete_transport_vehicle(vehicle_id: int):
 
         period_id = veh["period_id"]
         branch = veh["branch"]
+
+        # Guard: check if period is locked
+        check_closed = db.execute_query(
+            "SELECT is_closed, period_label FROM billing_periods WHERE id = %s;",
+            (period_id,),
+            fetch_all=False
+        )
+        if check_closed and check_closed.get("is_closed"):
+            p_lbl = check_closed.get("period_label") or f"#{period_id}"
+            raise HTTPException(status_code=400, detail=f"Billing month {p_lbl} is locked (read-only). Please unlock it before deleting vehicle records.")
 
         db.execute_commit("DELETE FROM transport_vehicle_entries WHERE id = %s;", (vehicle_id,))
 
@@ -5653,3 +6055,129 @@ def delete_attachment(attachment_id: int):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete attachment: {str(e)}")
+
+
+@app.get("/api/attachments/{attachment_id}/slides")
+def get_attachment_presentation_slides(attachment_id: int):
+    """
+    Extracts slide-by-slide presentation data from a PowerPoint (.pptx) file.
+    Returns structured slides with titles, bullet points, text blocks, tables, and notes.
+    """
+    try:
+        row = db.execute_query(
+            "SELECT id, file_name, file_type, file_path, is_link FROM monthly_attachments WHERE id = %s;",
+            (attachment_id,),
+            fetch_all=False
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+
+        file_path = row.get("file_path", "")
+        if row.get("is_link") or not file_path.startswith("/uploads/"):
+            return {
+                "status": "external_link",
+                "attachment_id": attachment_id,
+                "file_name": row["file_name"],
+                "file_path": file_path,
+                "is_link": True,
+                "total_slides": 0,
+                "slides": []
+            }
+
+        saved_filename = file_path.replace("/uploads/", "")
+        up_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+        local_file = os.path.join(up_dir, saved_filename)
+
+        if not os.path.exists(local_file):
+            raise HTTPException(status_code=404, detail="Physical presentation file not found on server")
+
+        if not local_file.lower().endswith(".pptx"):
+            return {
+                "status": "legacy_format",
+                "message": "Direct slide extraction supports PPTX format. You can download the presentation directly.",
+                "attachment_id": attachment_id,
+                "file_name": row["file_name"],
+                "file_path": file_path,
+                "total_slides": 0,
+                "slides": []
+            }
+
+        try:
+            import pptx
+            prs = pptx.Presentation(local_file)
+            slides_data = []
+
+            for idx, slide in enumerate(prs.slides):
+                slide_num = idx + 1
+                title = ""
+                if slide.shapes.title and slide.shapes.title.text:
+                    title = slide.shapes.title.text.strip()
+
+                text_blocks = []
+                tables = []
+                has_image = False
+
+                for shape in slide.shapes:
+                    if shape.has_table:
+                        tbl = shape.table
+                        table_matrix = []
+                        for row_idx, r in enumerate(tbl.rows):
+                            row_vals = [cell.text.strip() for cell in r.cells]
+                            table_matrix.append(row_vals)
+                        if table_matrix:
+                            tables.append(table_matrix)
+
+                    elif shape.has_text_frame and shape != slide.shapes.title:
+                        for p in shape.text_frame.paragraphs:
+                            p_text = p.text.strip()
+                            if p_text:
+                                text_blocks.append({
+                                    "text": p_text,
+                                    "level": p.level or 0
+                                })
+
+                notes = ""
+                try:
+                    if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                        notes = slide.notes_slide.notes_text_frame.text.strip()
+                except Exception:
+                    pass
+
+                # If title was not found via placeholder, infer from first text block
+                if not title and text_blocks:
+                    title = text_blocks[0]["text"]
+                    text_blocks = text_blocks[1:]
+                elif not title:
+                    title = f"Slide {slide_num}"
+
+                slides_data.append({
+                    "slide_number": slide_num,
+                    "title": title,
+                    "text_blocks": text_blocks,
+                    "tables": tables,
+                    "has_image": has_image,
+                    "notes": notes
+                })
+
+            return {
+                "status": "success",
+                "attachment_id": attachment_id,
+                "file_name": row["file_name"],
+                "file_path": file_path,
+                "total_slides": len(slides_data),
+                "slides": slides_data
+            }
+        except Exception as pe:
+            return {
+                "status": "parse_error",
+                "message": f"Could not parse PPTX slides: {str(pe)}",
+                "attachment_id": attachment_id,
+                "file_name": row["file_name"],
+                "file_path": file_path,
+                "total_slides": 0,
+                "slides": []
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

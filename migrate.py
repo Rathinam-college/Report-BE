@@ -516,6 +516,144 @@ MIGRATION_STEPS = [
         );
         CREATE INDEX IF NOT EXISTS idx_cctv_monthly_entries_period ON cctv_monthly_entries(period_id);
         """
+    ),
+    (
+        "Hostel Budget Tracking Table & Canonical Heads",
+        """
+        CREATE TABLE IF NOT EXISTS hostel_budget_tracking (
+            id SERIAL PRIMARY KEY,
+            s_no INT NOT NULL,
+            budget_head VARCHAR(100) UNIQUE NOT NULL,
+            sanctioned_amount NUMERIC(14,2) DEFAULT 0.0,
+            month_limit NUMERIC(14,2) DEFAULT 0.0,
+            sep_25_actual NUMERIC(14,2) DEFAULT 0.0,
+            oct_26_actual NUMERIC(14,2) DEFAULT 0.0,
+            nov_26_actual NUMERIC(14,2) DEFAULT 0.0,
+            dec_26_actual NUMERIC(14,2) DEFAULT 0.0,
+            jan_27_actual NUMERIC(14,2) DEFAULT 0.0,
+            feb_27_actual NUMERIC(14,2) DEFAULT 0.0,
+            mar_27_actual NUMERIC(14,2) DEFAULT 0.0,
+            apr_27_actual NUMERIC(14,2) DEFAULT 0.0,
+            may_27_actual NUMERIC(14,2) DEFAULT 0.0,
+            jun_27_actual NUMERIC(14,2) DEFAULT 0.0,
+            jul_27_actual NUMERIC(14,2) DEFAULT 0.0,
+            aug_27_actual NUMERIC(14,2) DEFAULT 0.0,
+            sep_27_actual NUMERIC(14,2) DEFAULT 0.0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO hostel_budget_tracking (s_no, budget_head, sanctioned_amount, month_limit)
+        VALUES
+            (1, 'Rent', 84762516, 10595314.5),
+            (2, 'Printing & Stationary Expenses', 15000, 1875),
+            (3, 'Rates & Taxes', 731612, 91451.5),
+            (4, 'Employee Cost', 15402907, 1925363.38),
+            (5, 'Hostel Management Services', 30490064, 3811258),
+            (6, 'Utility', 32893042, 4111630.25),
+            (7, 'Laundry Expenses', 11728517, 1466064.63),
+            (8, 'Repairs and Maintenance', 5425960, 678245),
+            (9, 'Events', 4000000, 500000)
+        ON CONFLICT (budget_head) DO NOTHING;
+        """
+    ),
+    (
+        "Food Budget Tracking Table & Canonical Heads",
+        """
+        CREATE TABLE IF NOT EXISTS food_budget_tracking (
+            id SERIAL PRIMARY KEY,
+            s_no INT NOT NULL,
+            budget_head VARCHAR(120) UNIQUE NOT NULL,
+            sanctioned_amount NUMERIC(14,2) DEFAULT 0.0,
+            month_limit NUMERIC(14,2) DEFAULT 0.0,
+            jun_26_actual NUMERIC(14,2) DEFAULT 0.0,
+            jul_26_actual NUMERIC(14,2) DEFAULT 0.0,
+            aug_26_actual NUMERIC(14,2) DEFAULT 0.0,
+            sep_26_actual NUMERIC(14,2) DEFAULT 0.0,
+            oct_26_actual NUMERIC(14,2) DEFAULT 0.0,
+            nov_26_actual NUMERIC(14,2) DEFAULT 0.0,
+            dec_26_actual NUMERIC(14,2) DEFAULT 0.0,
+            monthly_actuals JSONB DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO food_budget_tracking (s_no, budget_head, sanctioned_amount, month_limit)
+        VALUES
+            (1, 'Food Material', 105000000.0, 8750000.0),
+            (2, 'Food Team Salary', 36000000.0, 3000000.0),
+            (3, 'Contract Labour Expenses', 4800000.0, 400000.0),
+            (4, 'Catering Vendor Expenses', 6000000.0, 500000.0),
+            (5, 'FC Maintenance/Power/Water/Vehicle', 6600000.0, 550000.0),
+            (6, 'Event/Additional Food', 3000000.0, 250000.0),
+            (7, 'Food Festival', 6000000.0, 500000.0),
+            (8, 'Staff Welfare', 1800000.0, 150000.0)
+        ON CONFLICT (budget_head) DO NOTHING;
+        """
+    ),
+    (
+        "Transport Budget Tracking & Per-Fleet Tables (University, RPS, KPM, Common)",
+        """
+        CREATE TABLE IF NOT EXISTS transport_budget_tracking (
+            id SERIAL PRIMARY KEY,
+            branch VARCHAR(50) NOT NULL,
+            param_name VARCHAR(150) NOT NULL,
+            sanctioned_amount NUMERIC(14,2) DEFAULT 0.0,
+            display_order INT DEFAULT 1,
+            color VARCHAR(50),
+            bg VARCHAR(50),
+            is_total BOOLEAN DEFAULT FALSE,
+            is_blank BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (branch, param_name)
+        );
+        CREATE TABLE IF NOT EXISTS transport_budget_university (
+            id SERIAL PRIMARY KEY,
+            param_name VARCHAR(150) UNIQUE NOT NULL,
+            sanctioned_amount NUMERIC(14,2) DEFAULT 0.0,
+            display_order INT DEFAULT 1,
+            color VARCHAR(50),
+            bg VARCHAR(50),
+            is_total BOOLEAN DEFAULT FALSE,
+            is_blank BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS transport_budget_rps (
+            id SERIAL PRIMARY KEY,
+            param_name VARCHAR(150) UNIQUE NOT NULL,
+            sanctioned_amount NUMERIC(14,2) DEFAULT 0.0,
+            display_order INT DEFAULT 1,
+            color VARCHAR(50),
+            bg VARCHAR(50),
+            is_total BOOLEAN DEFAULT FALSE,
+            is_blank BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS transport_budget_kpm (
+            id SERIAL PRIMARY KEY,
+            param_name VARCHAR(150) UNIQUE NOT NULL,
+            sanctioned_amount NUMERIC(14,2) DEFAULT 0.0,
+            display_order INT DEFAULT 1,
+            color VARCHAR(50),
+            bg VARCHAR(50),
+            is_total BOOLEAN DEFAULT FALSE,
+            is_blank BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS transport_budget_common (
+            id SERIAL PRIMARY KEY,
+            param_name VARCHAR(150) UNIQUE NOT NULL,
+            sanctioned_amount NUMERIC(14,2) DEFAULT 0.0,
+            display_order INT DEFAULT 1,
+            color VARCHAR(50),
+            bg VARCHAR(50),
+            is_total BOOLEAN DEFAULT FALSE,
+            is_blank BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
     )
 ]
 

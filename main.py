@@ -4999,13 +4999,43 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
                 "mileage": avg_mileage
             }
 
+            # Populate live branch_summaries across all periods
+            bs_rows = db.execute_query(
+                """
+                SELECT branch, COUNT(DISTINCT vehicle_no) AS bus_count,
+                       COALESCE(SUM(total_expenses), 0) AS total_expenses,
+                       COALESCE(SUM(diesel_litres), 0) AS diesel_litres,
+                       COALESCE(SUM(km_run), 0) AS km_run
+                FROM transport_vehicle_entries
+                GROUP BY branch;
+                """
+            )
+            all_bs = {}
+            tot_buses_all = 0
+            for br_r in bs_rows:
+                b_name = br_r["branch"]
+                b_cnt = int(br_r["bus_count"] or 0)
+                tot_buses_all += b_cnt
+                all_bs[b_name] = {
+                    "bus_count": b_cnt,
+                    "total_expenses": float(br_r["total_expenses"] or 0),
+                    "diesel_litres": float(br_r["diesel_litres"] or 0),
+                    "km_run": float(br_r["km_run"] or 0)
+                }
+            all_bs["all"] = {
+                "bus_count": tot_buses_all,
+                "total_expenses": sum(v["total_expenses"] for v in all_bs.values()),
+                "diesel_litres": sum(v["diesel_litres"] for v in all_bs.values()),
+                "km_run": sum(v["km_run"] for v in all_bs.values())
+            }
+
             return {
                 "status": "success",
                 "period_id": "all",
                 "branch": b_filter,
                 "vehicles": clean_rows,
                 "summary": summary,
-                "branch_summaries": {}
+                "branch_summaries": all_bs
             }
 
         # Otherwise single period - Smart Resolution

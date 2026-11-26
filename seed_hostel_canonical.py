@@ -47,18 +47,23 @@ CANONICAL_HOSTEL_PARAMETERS = [
     ('', 'sq_feet_per_occupant', 'Sq feet per occupant in hostel', 'Per Student & Area Metrics', 5, 32, 'single_number', 'sq.ft/occ', 'Sq feet / Total Occupied'),
     ('28', 'normal_water_student_month', 'Normal water per student per month (Ltrs & cost)', 'Per Student & Area Metrics', 5, 33, 'units_and_cost', 'Ltr & ₹', None),
 
-    # Section 6: Water & Utilities Deep Dive (Excel Rows 38 - 54)
-    ('', 'power_cost_sqft', 'Power cost per sq feet', 'Water & Utilities Deep Dive', 6, 34, 'cost', '₹/sq.ft', 'Power cost / Sq feet'),
-    ('', 'units_per_occupant', 'Units per occupant per month - Hostel', 'Water & Utilities Deep Dive', 6, 35, 'single_number', 'kWh/occ', 'Power units / Total Occupied'),
-    ('', 'power_cost_occupant', 'Power cost Per occupant per month - Hostel', 'Water & Utilities Deep Dive', 6, 36, 'cost', '₹/occ', 'Power cost / Total Occupied'),
-    ('', 'normal_water_litres', 'Normal Water Consumption Ltr Hostels', 'Water & Utilities Deep Dive', 6, 37, 'single_number', 'Litres', None),
-    ('', 'normal_water_cost', 'Normal Water Consumption Cost Hostels', 'Water & Utilities Deep Dive', 6, 38, 'cost', 'INR (₹)', None),
-    ('', 'normal_water_ltr_day', 'Normal water Ltr per student per day - Hostels', 'Water & Utilities Deep Dive', 6, 39, 'single_number', 'L/day', 'Normal Water Ltr / Total Students / 30'),
-    ('', 'normal_water_cost_day', 'Normal Water cost Per student per day Hostels', 'Water & Utilities Deep Dive', 6, 40, 'cost', '₹/day', 'Normal Water Cost / Total Students / 30'),
-    ('', 'drinking_water_litres', 'Drinking Water Consumption Litres Hostels', 'Water & Utilities Deep Dive', 6, 41, 'single_number', 'Litres', None),
-    ('', 'drinking_water_cost', 'Drinking Water Consumption Cost Hostels', 'Water & Utilities Deep Dive', 6, 42, 'cost', 'INR (₹)', None),
-    ('', 'drinking_water_ltr_day', 'Drinking water Litres per student per day- Hostels', 'Water & Utilities Deep Dive', 6, 43, 'single_number', 'L/day', 'Drinking Water Ltr / Total Students / 30'),
-    ('', 'drinking_water_cost_day', 'Drinking Water cost Per student per day Hostels', 'Water & Utilities Deep Dive', 6, 44, 'cost', '₹/day', 'Drinking Water Cost / Total Students / 30')
+    # Section 6: Water & Utilities Deep Dive (Excel Rows 34 - 50)
+    ('', 'power_units', 'Power consumption units(EB + DG) Hostel', 'Water & Utilities Deep Dive', 6, 34, 'single_number', 'kWh', None),
+    ('', 'power_cost', 'Power consumption cost(EB + DG) Hostel', 'Water & Utilities Deep Dive', 6, 35, 'cost', 'INR (₹)', None),
+    ('', 'occupants_power', 'No of Students+ staff in Hostel', 'Water & Utilities Deep Dive', 6, 36, 'single_count', 'Occupants', 'Students + Staffs'),
+    ('', 'power_cost_sqft', 'Power cost per sq feet', 'Water & Utilities Deep Dive', 6, 37, 'cost', '₹/sq.ft', 'Power cost / Sq feet'),
+    ('', 'units_per_occupant', 'Units per occupant per month - Hostel', 'Water & Utilities Deep Dive', 6, 38, 'single_number', 'kWh/occ', 'Power units / Total Occupied'),
+    ('', 'power_cost_occupant', 'Power cost Per occupant per month - Hostel', 'Water & Utilities Deep Dive', 6, 39, 'cost', '₹/occ', 'Power cost / Total Occupied'),
+    ('', 'normal_water_litres', 'Normal Water Consumption Ltr Hostels', 'Water & Utilities Deep Dive', 6, 40, 'single_number', 'Litres', None),
+    ('', 'normal_water_cost', 'Normal Water Consumption Cost Hostels', 'Water & Utilities Deep Dive', 6, 41, 'cost', 'INR (₹)', None),
+    ('', 'students_normal_water', 'No of Students in Hostels', 'Water & Utilities Deep Dive', 6, 42, 'single_count', 'Students', 'Total Students in Hostel'),
+    ('', 'normal_water_ltr_day', 'Normal water Ltr per student per day - Hostels', 'Water & Utilities Deep Dive', 6, 43, 'single_number', 'L/day', 'Normal Water Ltr / Total Students / 30'),
+    ('', 'normal_water_cost_day', 'Normal Water cost Per student per day Hostels', 'Water & Utilities Deep Dive', 6, 44, 'cost', '₹/day', 'Normal Water Cost / Total Students / 30'),
+    ('', 'drinking_water_litres', 'Drinking Water Consumption Litres Hostels', 'Water & Utilities Deep Dive', 6, 45, 'single_number', 'Litres', None),
+    ('', 'drinking_water_cost', 'Drinking Water Consumption Cost Hostels', 'Water & Utilities Deep Dive', 6, 46, 'cost', 'INR (₹)', None),
+    ('', 'students_drinking_water', 'No of Students in Hostels', 'Water & Utilities Deep Dive', 6, 47, 'single_count', 'Students', 'Total Students in Hostel'),
+    ('', 'drinking_water_ltr_day', 'Drinking water Litres per student per day- Hostels', 'Water & Utilities Deep Dive', 6, 48, 'single_number', 'L/day', 'Drinking Water Ltr / Total Students / 30'),
+    ('', 'drinking_water_cost_day', 'Drinking Water cost Per student per day Hostels', 'Water & Utilities Deep Dive', 6, 49, 'cost', '₹/day', 'Drinking Water Cost / Total Students / 30')
 ]
 
 def ensure_and_seed_hostel_parameters():

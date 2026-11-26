@@ -455,6 +455,7 @@ MIGRATION_STEPS = [
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_transport_vehicle_entries_period_branch ON transport_vehicle_entries(period_id, branch);
+        ALTER TABLE transport_vehicle_entries ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(15, 2) DEFAULT 0.0;
         """
     ),
     (

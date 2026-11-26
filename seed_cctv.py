@@ -112,8 +112,11 @@ def seed():
                 display_order = EXCLUDED.display_order;
         ''', p)
 
-    # Seed CCTV billing periods
+    # Seed CCTV billing periods (Jun - Dec 2026)
     cctv_periods = [
+        ('Jun 1st to 30th', '2026-06', '2026-06-01', '2026-06-30', 'cctv'),
+        ('Jul 1st to 31st', '2026-07', '2026-07-01', '2026-07-31', 'cctv'),
+        ('Aug 1st to 31st', '2026-08', '2026-08-01', '2026-08-31', 'cctv'),
         ('Sep 1st to 30th', '2026-09', '2026-09-01', '2026-09-30', 'cctv'),
         ('Oct 1st to 31st', '2026-10', '2026-10-01', '2026-10-31', 'cctv'),
         ('Nov 1st to 30th', '2026-11', '2026-11-01', '2026-11-30', 'cctv'),
@@ -131,69 +134,80 @@ def seed():
                 VALUES (1, %s, %s, %s, %s, %s, 'all', FALSE);
             ''', cp)
 
-    # Get the period id for 'Sep 1st to 30th'
-    cur.execute("SELECT id FROM billing_periods WHERE module = 'cctv' AND period_code = '2026-09';")
-    p_row = cur.fetchone()
-    if p_row:
-        sep_id = p_row[0]
-        cur.execute('''
-            INSERT INTO cctv_monthly_entries (
-                period_id,
-                projects_completed, projects_in_progress, projects_total,
-                complaints_cctv, complaints_biometric, complaints_flapbarrier, complaints_total,
-                repeated_complaints, time_taken_complaints_hrs, tat_complaints_hrs,
-                service_cctv, service_biometric, service_flapbarrier, service_total,
-                repeated_work, time_taken_service_hrs, tat_service_hrs,
-                ppm_count,
-                quality_issues_received, quality_issues_closed, quality_issues_open,
-                material_expenses, labour_expenses, total_expenses,
-                approved_budget, cumulative_budget_spent, balance
-            ) VALUES (
-                %s,
-                1, 8, 9,
-                17, 5, 1, 23,
-                0, 40.5, 0.6,
-                50, 20, 3, 73,
-                0, 117.0, 0.62,
-                91,
-                0, 0, 0,
-                18000, 65000, 83000,
-                1634120, 83000, 1551120
-            ) ON CONFLICT (period_id) DO UPDATE
-            SET projects_completed = EXCLUDED.projects_completed,
-                projects_in_progress = EXCLUDED.projects_in_progress,
-                projects_total = EXCLUDED.projects_total,
-                complaints_cctv = EXCLUDED.complaints_cctv,
-                complaints_biometric = EXCLUDED.complaints_biometric,
-                complaints_flapbarrier = EXCLUDED.complaints_flapbarrier,
-                complaints_total = EXCLUDED.complaints_total,
-                repeated_complaints = EXCLUDED.repeated_complaints,
-                time_taken_complaints_hrs = EXCLUDED.time_taken_complaints_hrs,
-                tat_complaints_hrs = EXCLUDED.tat_complaints_hrs,
-                service_cctv = EXCLUDED.service_cctv,
-                service_biometric = EXCLUDED.service_biometric,
-                service_flapbarrier = EXCLUDED.service_flapbarrier,
-                service_total = EXCLUDED.service_total,
-                repeated_work = EXCLUDED.repeated_work,
-                time_taken_service_hrs = EXCLUDED.time_taken_service_hrs,
-                tat_service_hrs = EXCLUDED.tat_service_hrs,
-                ppm_count = EXCLUDED.ppm_count,
-                quality_issues_received = EXCLUDED.quality_issues_received,
-                quality_issues_closed = EXCLUDED.quality_issues_closed,
-                quality_issues_open = EXCLUDED.quality_issues_open,
-                material_expenses = EXCLUDED.material_expenses,
-                labour_expenses = EXCLUDED.labour_expenses,
-                total_expenses = EXCLUDED.total_expenses,
-                approved_budget = EXCLUDED.approved_budget,
-                cumulative_budget_spent = EXCLUDED.cumulative_budget_spent,
-                balance = EXCLUDED.balance;
-        ''', (sep_id,))
-        print(f"Seeded Sep 1st to 30th entry with id={sep_id}")
+    # Original CCTV Monthly Entries (Jun'26 - Oct'26)
+    cctv_entries = [
+        # (period_code, proj_comp, proj_prog, proj_tot, comp_cctv, comp_bio, comp_flap, comp_tot, rep_comp, time_comp, tat_comp, srv_cctv, srv_bio, srv_flap, srv_tot, rep_work, time_srv, tat_srv, ppm, qi_rec, qi_cls, qi_opn, mat_exp, lab_exp, tot_exp, app_bud, cum_spent, bal)
+        ('2026-06', 4, 11, 15,  23, 8, 3, 34,   0, 43.0, 1.26,   25, 6, 3, 34,   0, 59.0, 1.74,   50,   0, 0, 0,   4422, 142114, 146536,   3139116, 146536, 2992580),
+        ('2026-07', 0, 8, 8,    62, 2, 8, 72,   0, 85.5, 1.19,   31, 7, 2, 40,   0, 52.0, 1.30,   92,   0, 0, 0,   91981, 146075, 238056,  3139116, 384592, 2754524),
+        ('2026-08', 0, 8, 8,    2, 20, 4, 26,   0, 28.0, 1.08,   2, 25, 2, 29,   0, 51.0, 1.76,   61,   0, 0, 0,   174339, 145532, 319871, 3139116, 704463, 2434653),
+        ('2026-09', 0, 8, 8,    24, 3, 8, 35,   0, 29.0, 0.83,   34, 3, 3, 40,   0, 92.0, 2.29,   126,  0, 0, 0,   17362, 142459, 159821,  3139116, 836704, 2302412),
+        ('2026-10', 1, 8, 9,    14, 0, 1, 15,   0, 112.0, 7.47,  17, 2, 1, 20,   0, 35.0, 1.75,   118,  0, 0, 0,   85417, 156596, 242013,  3139116, 1078717, 2060399),
+    ]
+
+    for entry in cctv_entries:
+        p_code = entry[0]
+        cur.execute("SELECT id FROM billing_periods WHERE module = 'cctv' AND period_code = %s;", (p_code,))
+        p_row = cur.fetchone()
+        if p_row:
+            pid = p_row[0]
+            cur.execute('''
+                INSERT INTO cctv_monthly_entries (
+                    period_id,
+                    projects_completed, projects_in_progress, projects_total,
+                    complaints_cctv, complaints_biometric, complaints_flapbarrier, complaints_total,
+                    repeated_complaints, time_taken_complaints_hrs, tat_complaints_hrs,
+                    service_cctv, service_biometric, service_flapbarrier, service_total,
+                    repeated_work, time_taken_service_hrs, tat_service_hrs,
+                    ppm_count,
+                    quality_issues_received, quality_issues_closed, quality_issues_open,
+                    material_expenses, labour_expenses, total_expenses,
+                    approved_budget, cumulative_budget_spent, balance
+                ) VALUES (
+                    %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s
+                ) ON CONFLICT (period_id) DO UPDATE
+                SET projects_completed = EXCLUDED.projects_completed,
+                    projects_in_progress = EXCLUDED.projects_in_progress,
+                    projects_total = EXCLUDED.projects_total,
+                    complaints_cctv = EXCLUDED.complaints_cctv,
+                    complaints_biometric = EXCLUDED.complaints_biometric,
+                    complaints_flapbarrier = EXCLUDED.complaints_flapbarrier,
+                    complaints_total = EXCLUDED.complaints_total,
+                    repeated_complaints = EXCLUDED.repeated_complaints,
+                    time_taken_complaints_hrs = EXCLUDED.time_taken_complaints_hrs,
+                    tat_complaints_hrs = EXCLUDED.tat_complaints_hrs,
+                    service_cctv = EXCLUDED.service_cctv,
+                    service_biometric = EXCLUDED.service_biometric,
+                    service_flapbarrier = EXCLUDED.service_flapbarrier,
+                    service_total = EXCLUDED.service_total,
+                    repeated_work = EXCLUDED.repeated_work,
+                    time_taken_service_hrs = EXCLUDED.time_taken_service_hrs,
+                    tat_service_hrs = EXCLUDED.tat_service_hrs,
+                    ppm_count = EXCLUDED.ppm_count,
+                    quality_issues_received = EXCLUDED.quality_issues_received,
+                    quality_issues_closed = EXCLUDED.quality_issues_closed,
+                    quality_issues_open = EXCLUDED.quality_issues_open,
+                    material_expenses = EXCLUDED.material_expenses,
+                    labour_expenses = EXCLUDED.labour_expenses,
+                    total_expenses = EXCLUDED.total_expenses,
+                    approved_budget = EXCLUDED.approved_budget,
+                    cumulative_budget_spent = EXCLUDED.cumulative_budget_spent,
+                    balance = EXCLUDED.balance;
+            ''', (pid, *entry[1:]))
+            print(f"Seeded CCTV {p_code} entry with period_id={pid}")
 
     conn.commit()
     cur.close()
     release_db_connection(conn)
-    print("Parameters, periods, and September entry seeded successfully!")
+    print("Parameters, periods, and Jun-Oct CCTV entries seeded successfully!")
 
 if __name__ == '__main__':
     seed()

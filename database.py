@@ -18,9 +18,9 @@ db_pool = None
 def get_db_pool():
     global db_pool
     if db_pool is None:
-        db_pool = psycopg2.pool.SimpleConnectionPool(
+        db_pool = psycopg2.pool.ThreadedConnectionPool(
             minconn=1,
-            maxconn=10,
+            maxconn=30,
             host=DB_HOST,
             port=DB_PORT,
             dbname=DB_NAME,

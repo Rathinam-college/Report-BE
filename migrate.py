@@ -578,17 +578,29 @@ MIGRATION_STEPS = [
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-        INSERT INTO food_budget_tracking (s_no, budget_head, sanctioned_amount, month_limit)
+        INSERT INTO food_budget_tracking (
+            s_no, budget_head, sanctioned_amount, month_limit,
+            jun_26_actual, jul_26_actual, aug_26_actual, sep_26_actual, oct_26_actual
+        )
         VALUES
-            (1, 'Food Material', 105000000.0, 8750000.0),
-            (2, 'Food Team Salary', 36000000.0, 3000000.0),
-            (3, 'Contract Labour Expenses', 4800000.0, 400000.0),
-            (4, 'Catering Vendor Expenses', 6000000.0, 500000.0),
-            (5, 'FC Maintenance/Power/Water/Vehicle', 6600000.0, 550000.0),
-            (6, 'Event/Additional Food', 3000000.0, 250000.0),
-            (7, 'Food Festival', 6000000.0, 500000.0),
-            (8, 'Staff Welfare', 1800000.0, 150000.0)
-        ON CONFLICT (budget_head) DO NOTHING;
+            (1, 'Food Material', 126608030.0, 0.0, 6686557.0, 8319829.0, 7667497.0, 10934147.0, 10123675.0),
+            (2, 'Food Team Salary', 23020132.0, 0.0, 1694705.0, 1628691.0, 1862412.0, 1834324.0, 1988139.0),
+            (3, 'Contract Labour Expenses', 11292833.0, 0.0, 699188.0, 828184.0, 805171.0, 960290.0, 1020122.0),
+            (4, 'Catering Vendor Expenses', 5486000.0, 0.0, 260700.0, 410500.0, 299600.0, 515200.0, 498600.0),
+            (5, 'FC Maintenance/Power/Water/Vehicle', 6170173.0, 0.0, 426223.0, 321543.0, 532933.0, 495861.0, 459483.0),
+            (6, 'Event/Additional Food', 2263630.0, 0.0, 254495.0, 217870.0, 114490.0, 76775.0, 210525.0),
+            (7, 'Food Festival', 2531639.0, 0.0, 0.0, 0.0, 551639.0, 0.0, 0.0),
+            (8, 'Staff Welfare', 325000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        ON CONFLICT (budget_head) DO UPDATE SET
+            s_no = EXCLUDED.s_no,
+            sanctioned_amount = EXCLUDED.sanctioned_amount,
+            month_limit = EXCLUDED.month_limit,
+            jun_26_actual = EXCLUDED.jun_26_actual,
+            jul_26_actual = EXCLUDED.jul_26_actual,
+            aug_26_actual = EXCLUDED.aug_26_actual,
+            sep_26_actual = EXCLUDED.sep_26_actual,
+            oct_26_actual = EXCLUDED.oct_26_actual,
+            updated_at = CURRENT_TIMESTAMP;
         """
     ),
     (

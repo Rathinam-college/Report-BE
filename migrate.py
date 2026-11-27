@@ -687,6 +687,74 @@ MIGRATION_STEPS = [
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """
+    ),
+    (
+        "Audit 4-Topic Tables (Non-Academic Report, Schedule, NC Tracker, Internal Report)",
+        """
+        CREATE TABLE IF NOT EXISTS audit_non_academic_reports (
+            id SERIAL PRIMARY KEY,
+            period_id INT REFERENCES billing_periods(id) ON DELETE CASCADE,
+            s_no INT DEFAULT 1,
+            department VARCHAR(200) NOT NULL,
+            auditees TEXT DEFAULT '',
+            admin_score VARCHAR(30) DEFAULT '',
+            maintenance_support VARCHAR(30) DEFAULT '',
+            equipment_maintenance VARCHAR(30) DEFAULT '',
+            cafeteria VARCHAR(30) DEFAULT '',
+            site_infra VARCHAR(30) DEFAULT '',
+            transport VARCHAR(30) DEFAULT '',
+            security VARCHAR(30) DEFAULT '',
+            restroom VARCHAR(30) DEFAULT '',
+            sick_bay VARCHAR(30) DEFAULT '',
+            library VARCHAR(30) DEFAULT '',
+            total_score NUMERIC(10,2) DEFAULT 0.0,
+            score_pct NUMERIC(6,2) DEFAULT 0.0,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS audit_non_academic_schedules (
+            id SERIAL PRIMARY KEY,
+            period_id INT REFERENCES billing_periods(id) ON DELETE CASCADE,
+            s_no INT DEFAULT 1,
+            department VARCHAR(200) NOT NULL,
+            auditees TEXT DEFAULT '',
+            planned_date VARCHAR(120) DEFAULT '',
+            time_slot VARCHAR(120) DEFAULT '',
+            auditors TEXT DEFAULT '',
+            status VARCHAR(150) DEFAULT '',
+            remarks TEXT DEFAULT '',
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS audit_nc_tracker (
+            id SERIAL PRIMARY KEY,
+            period_id INT REFERENCES billing_periods(id) ON DELETE CASCADE,
+            s_no INT DEFAULT 1,
+            nc_no VARCHAR(80) DEFAULT '',
+            department VARCHAR(200) NOT NULL,
+            area VARCHAR(200) DEFAULT '',
+            nc_description TEXT DEFAULT '',
+            severity VARCHAR(50) DEFAULT 'Minor',
+            root_cause TEXT DEFAULT '',
+            corrective_action TEXT DEFAULT '',
+            responsible_person VARCHAR(150) DEFAULT '',
+            target_date VARCHAR(80) DEFAULT '',
+            closed_date VARCHAR(80) DEFAULT '',
+            status VARCHAR(80) DEFAULT 'Open',
+            remarks TEXT DEFAULT '',
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS audit_internal_reports (
+            id SERIAL PRIMARY KEY,
+            period_id INT REFERENCES billing_periods(id) ON DELETE CASCADE,
+            cycle_no VARCHAR(50) DEFAULT '',
+            criteria VARCHAR(200) DEFAULT 'QMS - 9001:2015',
+            s_no INT DEFAULT 1,
+            department VARCHAR(200) NOT NULL,
+            status VARCHAR(100) DEFAULT '',
+            total_scores NUMERIC(10,2) DEFAULT 0.0,
+            remarks TEXT DEFAULT '',
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
     )
 ]
 

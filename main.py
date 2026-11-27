@@ -147,6 +147,71 @@ def ensure_schema_compatibility():
         );
         """,
         """
+        CREATE TABLE IF NOT EXISTS audit_non_academic_reports (
+            id SERIAL PRIMARY KEY,
+            period_id INT REFERENCES billing_periods(id) ON DELETE CASCADE,
+            s_no INT DEFAULT 1,
+            department VARCHAR(200) NOT NULL,
+            auditees TEXT DEFAULT '',
+            admin_score VARCHAR(30) DEFAULT '',
+            maintenance_support VARCHAR(30) DEFAULT '',
+            equipment_maintenance VARCHAR(30) DEFAULT '',
+            cafeteria VARCHAR(30) DEFAULT '',
+            site_infra VARCHAR(30) DEFAULT '',
+            transport VARCHAR(30) DEFAULT '',
+            security VARCHAR(30) DEFAULT '',
+            restroom VARCHAR(30) DEFAULT '',
+            sick_bay VARCHAR(30) DEFAULT '',
+            library VARCHAR(30) DEFAULT '',
+            total_score NUMERIC(10,2) DEFAULT 0.0,
+            score_pct NUMERIC(6,2) DEFAULT 0.0,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS audit_non_academic_schedules (
+            id SERIAL PRIMARY KEY,
+            period_id INT REFERENCES billing_periods(id) ON DELETE CASCADE,
+            s_no INT DEFAULT 1,
+            department VARCHAR(200) NOT NULL,
+            auditees TEXT DEFAULT '',
+            planned_date VARCHAR(120) DEFAULT '',
+            time_slot VARCHAR(120) DEFAULT '',
+            auditors TEXT DEFAULT '',
+            status VARCHAR(150) DEFAULT '',
+            remarks TEXT DEFAULT '',
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS audit_nc_tracker (
+            id SERIAL PRIMARY KEY,
+            period_id INT REFERENCES billing_periods(id) ON DELETE CASCADE,
+            s_no INT DEFAULT 1,
+            nc_no VARCHAR(80) DEFAULT '',
+            department VARCHAR(200) NOT NULL,
+            area VARCHAR(200) DEFAULT '',
+            nc_description TEXT DEFAULT '',
+            severity VARCHAR(50) DEFAULT 'Minor',
+            root_cause TEXT DEFAULT '',
+            corrective_action TEXT DEFAULT '',
+            responsible_person VARCHAR(150) DEFAULT '',
+            target_date VARCHAR(80) DEFAULT '',
+            closed_date VARCHAR(80) DEFAULT '',
+            status VARCHAR(80) DEFAULT 'Open',
+            remarks TEXT DEFAULT '',
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS audit_internal_reports (
+            id SERIAL PRIMARY KEY,
+            period_id INT REFERENCES billing_periods(id) ON DELETE CASCADE,
+            cycle_no VARCHAR(50) DEFAULT '',
+            criteria VARCHAR(200) DEFAULT 'QMS - 9001:2015',
+            s_no INT DEFAULT 1,
+            department VARCHAR(200) NOT NULL,
+            status VARCHAR(100) DEFAULT '',
+            total_scores NUMERIC(10,2) DEFAULT 0.0,
+            remarks TEXT DEFAULT '',
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+        """
         CREATE TABLE IF NOT EXISTS hostel_master_parameters (
             id SERIAL PRIMARY KEY,
             s_no VARCHAR(20) DEFAULT '',
@@ -5737,6 +5802,322 @@ def lock_period(req: LockPeriodRequest):
     try:
         db.execute_commit("UPDATE billing_periods SET is_closed = %s WHERE id = %s", (req.is_closed, req.period_id))
         return {"status": "success", "is_closed": req.is_closed}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _check_audit_period_unlocked(period_id: int):
+    rows = db.execute_query("SELECT id, period_label, is_closed FROM billing_periods WHERE id = %s;", (int(period_id),))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Billing period not found")
+    if rows[0]["is_closed"]:
+        raise HTTPException(status_code=403, detail=f"{rows[0]['period_label']} is locked. Unlock the month first to edit Audit entries.")
+    return rows[0]["period_label"]
+
+
+def _serialize_audit_rows(rows):
+    out = []
+    for r in rows:
+        item = {}
+        for k, v in r.items():
+            if isinstance(v, Decimal):
+                item[k] = float(v)
+            elif isinstance(v, (datetime, date)):
+                item[k] = v.isoformat()
+            else:
+                item[k] = v
+        out.append(item)
+    return out
+
+
+@app.get("/api/audit/non-academic-report")
+def get_audit_non_academic_report(period_id: str = "all"):
+    try:
+        if str(period_id).lower() == "all":
+            rows = db.execute_query("SELECT * FROM audit_non_academic_reports ORDER BY period_id ASC, s_no ASC, id ASC;")
+        else:
+            rows = db.execute_query("SELECT * FROM audit_non_academic_reports WHERE period_id = %s ORDER BY s_no ASC, id ASC;", (int(period_id),))
+        return {"status": "success", "rows": _serialize_audit_rows(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/audit/non-academic-report")
+def save_audit_non_academic_report(req: Dict[str, Any]):
+    try:
+        period_id = req.get("period_id")
+        if not period_id:
+            raise HTTPException(status_code=400, detail="period_id is required")
+        label = _check_audit_period_unlocked(int(period_id))
+        items = req.get("rows") or []
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM audit_non_academic_reports WHERE period_id = %s;", (int(period_id),))
+                for idx, it in enumerate(items, start=1):
+                    dept = str(it.get("department") or "").strip()
+                    if not dept:
+                        continue
+                    score_fields = [
+                        "admin_score", "maintenance_support", "equipment_maintenance",
+                        "cafeteria", "site_infra", "transport", "security",
+                        "restroom", "sick_bay", "library"
+                    ]
+                    num_vals = []
+                    for sf in score_fields:
+                        raw = str(it.get(sf) or "").strip()
+                        if raw and raw.upper() != "N/A":
+                            try:
+                                num_vals.append(float(raw))
+                            except ValueError:
+                                pass
+                    calc_total = sum(num_vals) if num_vals else float(it.get("total_score") or 0)
+                    calc_pct = round((calc_total / (len(num_vals) * 100.0)) * 100.0, 2) if num_vals else float(it.get("score_pct") or 0)
+
+                    cur.execute(
+                        """
+                        INSERT INTO audit_non_academic_reports (
+                            period_id, s_no, department, auditees,
+                            admin_score, maintenance_support, equipment_maintenance,
+                            cafeteria, site_infra, transport, security,
+                            restroom, sick_bay, library, total_score, score_pct, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP);
+                        """,
+                        (
+                            int(period_id),
+                            int(it.get("s_no") or idx),
+                            dept,
+                            str(it.get("auditees") or ""),
+                            str(it.get("admin_score") or ""),
+                            str(it.get("maintenance_support") or ""),
+                            str(it.get("equipment_maintenance") or ""),
+                            str(it.get("cafeteria") or ""),
+                            str(it.get("site_infra") or ""),
+                            str(it.get("transport") or ""),
+                            str(it.get("security") or ""),
+                            str(it.get("restroom") or ""),
+                            str(it.get("sick_bay") or ""),
+                            str(it.get("library") or ""),
+                            calc_total,
+                            calc_pct,
+                        ),
+                    )
+                conn.commit()
+                return {"status": "success", "message": f"Saved Non-Academic Audit Report for {label}"}
+        finally:
+            db.release_db_connection(conn)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audit/non-academic-schedule")
+def get_audit_non_academic_schedule(period_id: str = "all"):
+    try:
+        if str(period_id).lower() == "all":
+            rows = db.execute_query("SELECT * FROM audit_non_academic_schedules ORDER BY period_id ASC, s_no ASC, id ASC;")
+        else:
+            rows = db.execute_query("SELECT * FROM audit_non_academic_schedules WHERE period_id = %s ORDER BY s_no ASC, id ASC;", (int(period_id),))
+        return {"status": "success", "rows": _serialize_audit_rows(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/audit/non-academic-schedule")
+def save_audit_non_academic_schedule(req: Dict[str, Any]):
+    try:
+        period_id = req.get("period_id")
+        if not period_id:
+            raise HTTPException(status_code=400, detail="period_id is required")
+        label = _check_audit_period_unlocked(int(period_id))
+        items = req.get("rows") or []
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM audit_non_academic_schedules WHERE period_id = %s;", (int(period_id),))
+                for idx, it in enumerate(items, start=1):
+                    dept = str(it.get("department") or "").strip()
+                    if not dept:
+                        continue
+                    cur.execute(
+                        """
+                        INSERT INTO audit_non_academic_schedules (
+                            period_id, s_no, department, auditees, planned_date,
+                            time_slot, auditors, status, remarks, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP);
+                        """,
+                        (
+                            int(period_id),
+                            int(it.get("s_no") or idx),
+                            dept,
+                            str(it.get("auditees") or ""),
+                            str(it.get("planned_date") or ""),
+                            str(it.get("time_slot") or ""),
+                            str(it.get("auditors") or ""),
+                            str(it.get("status") or ""),
+                            str(it.get("remarks") or ""),
+                        ),
+                    )
+                conn.commit()
+                return {"status": "success", "message": f"Saved Non-Academic Audit Schedule for {label}"}
+        finally:
+            db.release_db_connection(conn)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audit/nc-tracker")
+def get_audit_nc_tracker(period_id: str = "all"):
+    try:
+        if str(period_id).lower() == "all":
+            rows = db.execute_query("SELECT * FROM audit_nc_tracker ORDER BY period_id ASC, s_no ASC, id ASC;")
+        else:
+            rows = db.execute_query("SELECT * FROM audit_nc_tracker WHERE period_id = %s ORDER BY s_no ASC, id ASC;", (int(period_id),))
+        return {"status": "success", "rows": _serialize_audit_rows(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/audit/nc-tracker")
+def save_audit_nc_tracker(req: Dict[str, Any]):
+    try:
+        period_id = req.get("period_id")
+        if not period_id:
+            raise HTTPException(status_code=400, detail="period_id is required")
+        label = _check_audit_period_unlocked(int(period_id))
+        items = req.get("rows") or []
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM audit_nc_tracker WHERE period_id = %s;", (int(period_id),))
+                for idx, it in enumerate(items, start=1):
+                    dept = str(it.get("department") or "").strip()
+                    if not dept:
+                        continue
+                    cur.execute(
+                        """
+                        INSERT INTO audit_nc_tracker (
+                            period_id, s_no, nc_no, department, area, nc_description,
+                            severity, root_cause, corrective_action, responsible_person,
+                            target_date, closed_date, status, remarks, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP);
+                        """,
+                        (
+                            int(period_id),
+                            int(it.get("s_no") or idx),
+                            str(it.get("nc_no") or ""),
+                            dept,
+                            str(it.get("area") or ""),
+                            str(it.get("nc_description") or ""),
+                            str(it.get("severity") or "Minor"),
+                            str(it.get("root_cause") or ""),
+                            str(it.get("corrective_action") or ""),
+                            str(it.get("responsible_person") or ""),
+                            str(it.get("target_date") or ""),
+                            str(it.get("closed_date") or ""),
+                            str(it.get("status") or "Open"),
+                            str(it.get("remarks") or ""),
+                        ),
+                    )
+                conn.commit()
+                return {"status": "success", "message": f"Saved Non-Conformity Tracker for {label}"}
+        finally:
+            db.release_db_connection(conn)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audit/internal-report")
+def get_audit_internal_report(period_id: str = "all"):
+    try:
+        if str(period_id).lower() == "all":
+            rows = db.execute_query("SELECT * FROM audit_internal_reports ORDER BY period_id ASC, s_no ASC, id ASC;")
+        else:
+            rows = db.execute_query("SELECT * FROM audit_internal_reports WHERE period_id = %s ORDER BY s_no ASC, id ASC;", (int(period_id),))
+        return {"status": "success", "rows": _serialize_audit_rows(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/audit/internal-report")
+def save_audit_internal_report(req: Dict[str, Any]):
+    try:
+        period_id = req.get("period_id")
+        if not period_id:
+            raise HTTPException(status_code=400, detail="period_id is required")
+        label = _check_audit_period_unlocked(int(period_id))
+        items = req.get("rows") or []
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM audit_internal_reports WHERE period_id = %s;", (int(period_id),))
+                for idx, it in enumerate(items, start=1):
+                    dept = str(it.get("department") or "").strip()
+                    if not dept:
+                        continue
+                    cur.execute(
+                        """
+                        INSERT INTO audit_internal_reports (
+                            period_id, cycle_no, criteria, s_no, department,
+                            status, total_scores, remarks, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP);
+                        """,
+                        (
+                            int(period_id),
+                            str(it.get("cycle_no") or req.get("cycle_no") or ""),
+                            str(it.get("criteria") or req.get("criteria") or "QMS - 9001:2015"),
+                            int(it.get("s_no") or idx),
+                            dept,
+                            str(it.get("status") or ""),
+                            float(it.get("total_scores") or 0.0),
+                            str(it.get("remarks") or ""),
+                        ),
+                    )
+                conn.commit()
+                return {"status": "success", "message": f"Saved Internal Audit Report for {label}"}
+        finally:
+            db.release_db_connection(conn)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audit/summary")
+def get_audit_4topic_summary(period_id: str = "all"):
+    try:
+        is_all = str(period_id).lower() == "all"
+        if is_all:
+            na_rep = db.execute_query("SELECT * FROM audit_non_academic_reports ORDER BY period_id ASC, s_no ASC, id ASC;")
+            na_sch = db.execute_query("SELECT * FROM audit_non_academic_schedules ORDER BY period_id ASC, s_no ASC, id ASC;")
+            nc_trk = db.execute_query("SELECT * FROM audit_nc_tracker ORDER BY period_id ASC, s_no ASC, id ASC;")
+            int_rep = db.execute_query("SELECT * FROM audit_internal_reports ORDER BY period_id ASC, s_no ASC, id ASC;")
+        else:
+            pid = int(period_id)
+            na_rep = db.execute_query("SELECT * FROM audit_non_academic_reports WHERE period_id = %s ORDER BY s_no ASC, id ASC;", (pid,))
+            na_sch = db.execute_query("SELECT * FROM audit_non_academic_schedules WHERE period_id = %s ORDER BY s_no ASC, id ASC;", (pid,))
+            nc_trk = db.execute_query("SELECT * FROM audit_nc_tracker WHERE period_id = %s ORDER BY s_no ASC, id ASC;", (pid,))
+            int_rep = db.execute_query("SELECT * FROM audit_internal_reports WHERE period_id = %s ORDER BY s_no ASC, id ASC;", (pid,))
+        return {
+            "status": "success",
+            "non_academic_report": _serialize_audit_rows(na_rep),
+            "non_academic_schedule": _serialize_audit_rows(na_sch),
+            "nc_tracker": _serialize_audit_rows(nc_trk),
+            "internal_report": _serialize_audit_rows(int_rep),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

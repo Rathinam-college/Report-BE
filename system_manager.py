@@ -21,11 +21,12 @@ def generate_sql_dump() -> str:
         "SET standard_conforming_strings = on;\n"
     ]
 
-    tables = [
+    preferred_order = [
         'fiscal_years',
         'billing_periods',
         'expense_categories',
         'cost_heads',
+        'category_formulas',
         'vendors',
         'users',
         'role_page_permissions',
@@ -33,6 +34,7 @@ def generate_sql_dump() -> str:
         'dining_census_entries',
         'utility_meter_logs',
         'food_budget_tracking',
+        'food_power_water_entries',
         'hostel_master_parameters',
         'hostel_census_entries',
         'hostel_budget_tracking',
@@ -46,7 +48,15 @@ def generate_sql_dump() -> str:
         'transport_budget_university',
         'cctv_master_parameters',
         'cctv_monthly_entries',
+        'deleted_master_parameters',
         'monthly_attachments'
+    ]
+    all_db_tables_rows = db.execute_query(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name;"
+    )
+    all_db_tables = [r["table_name"] for r in all_db_tables_rows]
+    tables = [t for t in preferred_order if t in all_db_tables] + [
+        t for t in all_db_tables if t not in preferred_order
     ]
 
     for table in tables:
@@ -92,21 +102,17 @@ def generate_sql_dump() -> str:
         except Exception as e:
             dump_lines.append(f"-- Error dumping {table}: {str(e)}\n")
 
-    # Sequence updates
+    # Sequence updates for every dumped table that has an 'id' sequence
     dump_lines.append("-- -------------------------------------------------------------")
     dump_lines.append("-- Sequence Resets")
     dump_lines.append("-- -------------------------------------------------------------")
-    serial_tables = [
-        'fiscal_years', 'billing_periods', 'expense_categories', 'cost_heads',
-        'vendors', 'users', 'monthly_expense_entries', 'food_budget_tracking',
-        'hostel_master_parameters', 'hostel_census_entries', 'hostel_budget_tracking',
-        'transport_master_parameters', 'transport_census_entries', 'transport_vehicle_entries',
-        'transport_budget_tracking', 'transport_budget_common', 'transport_budget_kpm',
-        'transport_budget_rps', 'transport_budget_university', 'cctv_master_parameters',
-        'cctv_monthly_entries', 'monthly_attachments'
-    ]
-    for st in serial_tables:
-        dump_lines.append(f"SELECT setval(pg_get_serial_sequence('{st}', 'id'), COALESCE((SELECT MAX(id) FROM {st}), 1));")
+    seq_rows = db.execute_query(
+        "SELECT table_name FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'id' AND (column_default LIKE 'nextval%%' OR is_identity = 'YES') ORDER BY table_name;"
+    )
+    seq_tables = {r["table_name"] for r in seq_rows}
+    for st in tables:
+        if st in seq_tables:
+            dump_lines.append(f"SELECT setval(pg_get_serial_sequence('{st}', 'id'), COALESCE((SELECT MAX(id) FROM {st}), 1));")
 
     dump_lines.append("\nCOMMIT;\n-- End of Backup Dump\n")
     return "\n".join(dump_lines)

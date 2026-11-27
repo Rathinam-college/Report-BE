@@ -132,6 +132,21 @@ def ensure_schema_compatibility():
         "ALTER TABLE hostel_budget_tracking ADD COLUMN IF NOT EXISTS aug_27_actual NUMERIC DEFAULT 0.0;",
         "ALTER TABLE hostel_budget_tracking ADD COLUMN IF NOT EXISTS sep_27_actual NUMERIC DEFAULT 0.0;",
         """
+        CREATE TABLE IF NOT EXISTS food_power_water_entries (
+            id SERIAL PRIMARY KEY,
+            period_id INT UNIQUE REFERENCES billing_periods(id) ON DELETE CASCADE,
+            power_units NUMERIC(14,2) DEFAULT 0.0,
+            power_cost NUMERIC(14,2) DEFAULT 0.0,
+            students_staff_count NUMERIC(14,2) DEFAULT 0.0,
+            normal_water_litres NUMERIC(14,2) DEFAULT 0.0,
+            normal_water_cost NUMERIC(14,2) DEFAULT 0.0,
+            students_count NUMERIC(14,2) DEFAULT 0.0,
+            drinking_water_litres NUMERIC(14,2) DEFAULT 0.0,
+            drinking_water_cost NUMERIC(14,2) DEFAULT 0.0,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+        """
         CREATE TABLE IF NOT EXISTS hostel_master_parameters (
             id SERIAL PRIMARY KEY,
             s_no VARCHAR(20) DEFAULT '',
@@ -961,6 +976,109 @@ def update_food_budget_tracking(req: Dict[str, Any]):
                 return {"status": "success", "message": "Food budget tracking updated successfully"}
         finally:
             db.release_db_connection(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/food/power-water")
+def get_food_power_water():
+    """
+    Returns Power & Water consumption entries for Food/Kitchen keyed by period_id.
+    """
+    try:
+        rows = db.execute_query(
+            """
+            SELECT fpw.*, bp.period_label, bp.period_code, bp.operating_days, bp.is_closed
+            FROM food_power_water_entries fpw
+            JOIN billing_periods bp ON bp.id = fpw.period_id
+            ORDER BY bp.period_code ASC;
+            """
+        )
+        entries = {}
+        for r in rows:
+            pid = str(r["period_id"])
+            entries[pid] = {
+                "period_id": r["period_id"],
+                "power_units": float(r["power_units"] or 0.0),
+                "power_cost": float(r["power_cost"] or 0.0),
+                "students_staff_count": float(r["students_staff_count"] or 0.0),
+                "normal_water_litres": float(r["normal_water_litres"] or 0.0),
+                "normal_water_cost": float(r["normal_water_cost"] or 0.0),
+                "students_count": float(r["students_count"] or 0.0),
+                "drinking_water_litres": float(r["drinking_water_litres"] or 0.0),
+                "drinking_water_cost": float(r["drinking_water_cost"] or 0.0),
+            }
+        return {"status": "success", "entries": entries}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/food/power-water")
+def save_food_power_water(req: Dict[str, Any]):
+    """
+    Saves Power & Water consumption entries for a single Food billing period.
+    Enforces billing_periods.is_closed lock check.
+    """
+    try:
+        period_id = req.get("period_id")
+        if not period_id:
+            raise HTTPException(status_code=400, detail="period_id is required")
+
+        p_rows = db.execute_query(
+            "SELECT id, period_label, is_closed FROM billing_periods WHERE id = %s;",
+            (int(period_id),)
+        )
+        if not p_rows:
+            raise HTTPException(status_code=404, detail="Billing period not found")
+        if p_rows[0]["is_closed"]:
+            raise HTTPException(
+                status_code=403,
+                detail=f"{p_rows[0]['period_label']} is locked. Unlock the month first to edit Power & Water."
+            )
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO food_power_water_entries (
+                        period_id, power_units, power_cost, students_staff_count,
+                        normal_water_litres, normal_water_cost, students_count,
+                        drinking_water_litres, drinking_water_cost, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (period_id) DO UPDATE SET
+                        power_units = EXCLUDED.power_units,
+                        power_cost = EXCLUDED.power_cost,
+                        students_staff_count = EXCLUDED.students_staff_count,
+                        normal_water_litres = EXCLUDED.normal_water_litres,
+                        normal_water_cost = EXCLUDED.normal_water_cost,
+                        students_count = EXCLUDED.students_count,
+                        drinking_water_litres = EXCLUDED.drinking_water_litres,
+                        drinking_water_cost = EXCLUDED.drinking_water_cost,
+                        updated_at = CURRENT_TIMESTAMP;
+                    """,
+                    (
+                        int(period_id),
+                        float(req.get("power_units") or 0.0),
+                        float(req.get("power_cost") or 0.0),
+                        float(req.get("students_staff_count") or 0.0),
+                        float(req.get("normal_water_litres") or 0.0),
+                        float(req.get("normal_water_cost") or 0.0),
+                        float(req.get("students_count") or 0.0),
+                        float(req.get("drinking_water_litres") or 0.0),
+                        float(req.get("drinking_water_cost") or 0.0),
+                    ),
+                )
+                conn.commit()
+                return {
+                    "status": "success",
+                    "message": f"Saved Power & Water for {p_rows[0]['period_label']} successfully"
+                }
+        finally:
+            db.release_db_connection(conn)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -4914,44 +5032,53 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
             if b_filter == "all":
                 rows = db.execute_query(
                     """
-                    SELECT 'all' AS period_id, branch, vehicle_no, make, model, 
-                           SUM(fuel_expenses) AS fuel_expenses, 
-                           SUM(fc_cost) AS fc_cost, 
-                           SUM(statutory_cost) AS statutory_cost, 
-                           SUM(repair_maintenance) AS repair_maintenance, 
-                           SUM(parking_fastag) AS parking_fastag, 
-                           SUM(cctv_replacement) AS cctv_replacement, 
-                           SUM(employee_cost) AS employee_cost, 
-                           SUM(other_cost) AS other_cost, 
-                           SUM(total_expenses) AS total_expenses, 
-                           SUM(diesel_litres) AS diesel_litres, 
-                           SUM(km_run) AS km_run, 
-                           MIN(display_order) AS display_order
-                    FROM transport_vehicle_entries
-                    GROUP BY branch, vehicle_no, make, model
-                    ORDER BY branch, MIN(display_order), vehicle_no;
+                    SELECT 'all' AS period_id, tve.branch,
+                           MAX(tve.vehicle_no) AS vehicle_no,
+                           MAX(tve.make) AS make,
+                           MAX(tve.model) AS model,
+                           SUM(tve.fuel_expenses) AS fuel_expenses,
+                           SUM(tve.fc_cost) AS fc_cost,
+                           SUM(tve.statutory_cost) AS statutory_cost,
+                           SUM(tve.repair_maintenance) AS repair_maintenance,
+                           SUM(tve.parking_fastag) AS parking_fastag,
+                           SUM(tve.cctv_replacement) AS cctv_replacement,
+                           SUM(tve.employee_cost) AS employee_cost,
+                           SUM(tve.other_cost) AS other_cost,
+                           SUM(tve.total_expenses) AS total_expenses,
+                           SUM(tve.diesel_litres) AS diesel_litres,
+                           SUM(tve.km_run) AS km_run,
+                           MIN(tve.display_order) AS display_order
+                    FROM transport_vehicle_entries tve
+                    JOIN billing_periods bp ON bp.id = tve.period_id
+                    WHERE bp.branch = 'all'
+                    GROUP BY tve.branch, REGEXP_REPLACE(UPPER(REPLACE(TRIM(tve.vehicle_no), ' ', '')), 'AC$', '')
+                    ORDER BY tve.branch, MIN(tve.display_order), MAX(tve.vehicle_no);
                     """
                 )
             else:
                 rows = db.execute_query(
                     """
-                    SELECT 'all' AS period_id, branch, vehicle_no, make, model, 
-                           SUM(fuel_expenses) AS fuel_expenses, 
-                           SUM(fc_cost) AS fc_cost, 
-                           SUM(statutory_cost) AS statutory_cost, 
-                           SUM(repair_maintenance) AS repair_maintenance, 
-                           SUM(parking_fastag) AS parking_fastag, 
-                           SUM(cctv_replacement) AS cctv_replacement, 
-                           SUM(employee_cost) AS employee_cost, 
-                           SUM(other_cost) AS other_cost, 
-                           SUM(total_expenses) AS total_expenses, 
-                           SUM(diesel_litres) AS diesel_litres, 
-                           SUM(km_run) AS km_run, 
-                           MIN(display_order) AS display_order
-                    FROM transport_vehicle_entries
-                    WHERE LOWER(branch) = LOWER(%s)
-                    GROUP BY branch, vehicle_no, make, model
-                    ORDER BY MIN(display_order), vehicle_no;
+                    SELECT 'all' AS period_id, tve.branch,
+                           MAX(tve.vehicle_no) AS vehicle_no,
+                           MAX(tve.make) AS make,
+                           MAX(tve.model) AS model,
+                           SUM(tve.fuel_expenses) AS fuel_expenses,
+                           SUM(tve.fc_cost) AS fc_cost,
+                           SUM(tve.statutory_cost) AS statutory_cost,
+                           SUM(tve.repair_maintenance) AS repair_maintenance,
+                           SUM(tve.parking_fastag) AS parking_fastag,
+                           SUM(tve.cctv_replacement) AS cctv_replacement,
+                           SUM(tve.employee_cost) AS employee_cost,
+                           SUM(tve.other_cost) AS other_cost,
+                           SUM(tve.total_expenses) AS total_expenses,
+                           SUM(tve.diesel_litres) AS diesel_litres,
+                           SUM(tve.km_run) AS km_run,
+                           MIN(tve.display_order) AS display_order
+                    FROM transport_vehicle_entries tve
+                    JOIN billing_periods bp ON bp.id = tve.period_id
+                    WHERE bp.branch = 'all' AND LOWER(tve.branch) = LOWER(%s)
+                    GROUP BY tve.branch, REGEXP_REPLACE(UPPER(REPLACE(TRIM(tve.vehicle_no), ' ', '')), 'AC$', '')
+                    ORDER BY MIN(tve.display_order), MAX(tve.vehicle_no);
                     """,
                     (b_filter,)
                 )
@@ -4999,10 +5126,10 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
                 "mileage": avg_mileage
             }
 
-            # Populate live branch_summaries across all periods
+            # Populate live branch_summaries across all periods (bus_count from latest period per branch)
             bs_rows = db.execute_query(
                 """
-                SELECT branch, COUNT(DISTINCT vehicle_no) AS bus_count,
+                SELECT branch,
                        COALESCE(SUM(total_expenses), 0) AS total_expenses,
                        COALESCE(SUM(diesel_litres), 0) AS diesel_litres,
                        COALESCE(SUM(km_run), 0) AS km_run
@@ -5010,11 +5137,22 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
                 GROUP BY branch;
                 """
             )
+            latest_counts_rows = db.execute_query(
+                """
+                SELECT DISTINCT ON (tve.branch) tve.branch, COUNT(*) AS bus_count
+                FROM transport_vehicle_entries tve
+                JOIN billing_periods bp ON bp.id = tve.period_id
+                WHERE bp.branch = 'all'
+                GROUP BY tve.branch, tve.period_id, bp.period_code
+                ORDER BY tve.branch, bp.period_code DESC, tve.period_id DESC;
+                """
+            )
+            latest_counts = {r["branch"]: int(r["bus_count"] or 0) for r in latest_counts_rows}
             all_bs = {}
             tot_buses_all = 0
             for br_r in bs_rows:
                 b_name = br_r["branch"]
-                b_cnt = int(br_r["bus_count"] or 0)
+                b_cnt = latest_counts.get(b_name, 0)
                 tot_buses_all += b_cnt
                 all_bs[b_name] = {
                     "bus_count": b_cnt,

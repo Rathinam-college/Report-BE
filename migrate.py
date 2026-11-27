@@ -517,6 +517,7 @@ MIGRATION_STEPS = [
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_cctv_monthly_entries_period ON cctv_monthly_entries(period_id);
+        ALTER TABLE cctv_monthly_entries ADD COLUMN IF NOT EXISTS branch VARCHAR(50) NOT NULL DEFAULT 'all';
         """
     ),
     (
@@ -653,6 +654,24 @@ MIGRATION_STEPS = [
             is_total BOOLEAN DEFAULT FALSE,
             is_blank BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    ),
+    (
+        "Food Power & Water Entries Table",
+        """
+        CREATE TABLE IF NOT EXISTS food_power_water_entries (
+            id SERIAL PRIMARY KEY,
+            period_id INT UNIQUE REFERENCES billing_periods(id) ON DELETE CASCADE,
+            power_units NUMERIC(14,2) DEFAULT 0.0,
+            power_cost NUMERIC(14,2) DEFAULT 0.0,
+            students_staff_count NUMERIC(14,2) DEFAULT 0.0,
+            normal_water_litres NUMERIC(14,2) DEFAULT 0.0,
+            normal_water_cost NUMERIC(14,2) DEFAULT 0.0,
+            students_count NUMERIC(14,2) DEFAULT 0.0,
+            drinking_water_litres NUMERIC(14,2) DEFAULT 0.0,
+            drinking_water_cost NUMERIC(14,2) DEFAULT 0.0,
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """

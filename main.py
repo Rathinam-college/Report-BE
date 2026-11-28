@@ -271,7 +271,10 @@ def ensure_schema_compatibility():
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_trans_veh_period_branch ON transport_vehicle_entries(period_id, branch);
-        """
+        """,
+        "ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(14, 2) DEFAULT 0.00;",
+        "ALTER TABLE transport_vehicle_entries ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(15, 2) DEFAULT 0.0;",
+        "ALTER TABLE audit_non_academic_reports ADD COLUMN IF NOT EXISTS remarks TEXT DEFAULT '';"
     ]
     for stmt in stmts:
         try:
@@ -6028,9 +6031,9 @@ def save_audit_non_academic_report(req: Dict[str, Any]):
                             period_id, s_no, department, auditees,
                             admin_score, maintenance_support, equipment_maintenance,
                             cafeteria, site_infra, transport, security,
-                            restroom, sick_bay, library, total_score, score_pct, updated_at
+                            restroom, sick_bay, library, total_score, score_pct, remarks, updated_at
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP);
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP);
                         """,
                         (
                             int(period_id),
@@ -6049,6 +6052,7 @@ def save_audit_non_academic_report(req: Dict[str, Any]):
                             str(it.get("library") or ""),
                             calc_total,
                             calc_pct,
+                            str(it.get("remarks") or ""),
                         ),
                     )
                 conn.commit()

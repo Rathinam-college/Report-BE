@@ -324,6 +324,7 @@ MIGRATION_STEPS = [
         ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS fuel_cost_per_km NUMERIC(10, 2) DEFAULT 0.00;
         ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS diesel_per_100km NUMERIC(10, 2) DEFAULT 0.00;
         ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS cab_billing NUMERIC(12, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(14, 2) DEFAULT 0.00;
         """
     ),
     (
@@ -709,8 +710,10 @@ MIGRATION_STEPS = [
             library VARCHAR(30) DEFAULT '',
             total_score NUMERIC(10,2) DEFAULT 0.0,
             score_pct NUMERIC(6,2) DEFAULT 0.0,
+            remarks TEXT DEFAULT '',
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        ALTER TABLE audit_non_academic_reports ADD COLUMN IF NOT EXISTS remarks TEXT DEFAULT '';
         CREATE TABLE IF NOT EXISTS audit_non_academic_schedules (
             id SERIAL PRIMARY KEY,
             period_id INT REFERENCES billing_periods(id) ON DELETE CASCADE,
@@ -774,6 +777,7 @@ MIGRATION_STEPS = [
         "\n".join([
             f"""
             CREATE TABLE IF NOT EXISTS transport_census_{fk} (LIKE transport_census_entries INCLUDING DEFAULTS);
+            ALTER TABLE transport_census_{fk} ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(14, 2) DEFAULT 0.00;
             ALTER TABLE transport_census_{fk} DROP CONSTRAINT IF EXISTS uq_transport_census_{fk}_period;
             ALTER TABLE transport_census_{fk} ADD CONSTRAINT uq_transport_census_{fk}_period UNIQUE (period_id);
             INSERT INTO transport_census_{fk}

@@ -755,6 +755,46 @@ MIGRATION_STEPS = [
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """
+    ),
+    (
+        "Transport Per-Fleet Separate Tables (KPM, RPS, University, Common)",
+        "\n".join([
+            f"""
+            CREATE TABLE IF NOT EXISTS transport_census_{fk} (LIKE transport_census_entries INCLUDING DEFAULTS);
+            ALTER TABLE transport_census_{fk} DROP CONSTRAINT IF EXISTS uq_transport_census_{fk}_period;
+            ALTER TABLE transport_census_{fk} ADD CONSTRAINT uq_transport_census_{fk}_period UNIQUE (period_id);
+            INSERT INTO transport_census_{fk}
+            SELECT * FROM transport_census_entries WHERE LOWER(branch) = '{fk}'
+            ON CONFLICT (period_id) DO NOTHING;
+
+            CREATE TABLE IF NOT EXISTS transport_vehicles_{fk} (LIKE transport_vehicle_entries INCLUDING DEFAULTS);
+            INSERT INTO transport_vehicles_{fk}
+            SELECT * FROM transport_vehicle_entries
+            WHERE LOWER(branch) = '{fk}'
+              AND NOT EXISTS (SELECT 1 FROM transport_vehicles_{fk} LIMIT 1);
+
+            CREATE TABLE IF NOT EXISTS transport_expenses_{fk} (
+                id BIGINT PRIMARY KEY,
+                period_id INT,
+                cost_head_id INT,
+                vendor_id INT,
+                amount NUMERIC(15, 2) DEFAULT 0.0,
+                status VARCHAR(50),
+                remarks TEXT,
+                recorded_by VARCHAR(100),
+                audited_at TIMESTAMP,
+                created_at TIMESTAMP,
+                updated_at TIMESTAMP,
+                module VARCHAR(50),
+                branch VARCHAR(50)
+            );
+            INSERT INTO transport_expenses_{fk}
+            SELECT id, period_id, cost_head_id, vendor_id, amount, status::text, remarks, recorded_by, audited_at, created_at, updated_at, module, branch
+            FROM transport_expense_entries WHERE LOWER(branch) = '{fk}'
+            ON CONFLICT (id) DO NOTHING;
+            """
+            for fk in ("kpm", "rps", "university", "common")
+        ])
     )
 ]
 

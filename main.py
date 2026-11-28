@@ -3890,6 +3890,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         per_student_cost_expenses, per_student_fee_year, demand_per_km_day, km_per_veh_day,
         fuel_cost_per_km, diesel_per_100km, remarks
     ))
+    sync_fleet_census(cur, period_id, b_val)
 
 
 
@@ -4341,6 +4342,7 @@ def compute_and_upsert_transport_census(cur, period_id: int, tc: Dict[str, Any],
         per_student_cost_expenses, per_student_fee_year, demand_per_km_day, km_per_veh_day,
         fuel_cost_per_km, diesel_per_100km, remarks
     ))
+    sync_fleet_census(cur, period_id, b_val)
 
 
 @app.post("/api/workstation/batch-save")
@@ -4367,6 +4369,8 @@ def batch_save_workstation_data(req: BatchSaveRequest):
                         updated_at = CURRENT_TIMESTAMP;
                     """
                     cur.execute(upsert_sql, (mod, req.period_id, item.cost_head_id, item.vendor_id, item.amount, item.remarks, branch))
+                    if mod == "transport":
+                        sync_fleet_expenses(cur, req.period_id, branch)
 
                 # Update Hostel Census & Operational Metrics
                 if req.hostel_census:
@@ -4963,18 +4967,117 @@ def get_dedicated_branch_budget_table(branch_name: str):
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Table {table_name} not found or query error: {str(e)}")
 
+FLEET_KEY_MAP = {
+    "kpm": "kpm",
+    "kpm branch": "kpm",
+    "rps": "rps",
+    "rps branch": "rps",
+    "university": "university",
+    "university fleet": "university",
+    "common": "common",
+}
+
+
+def get_fleet_table(prefix: str, branch: Optional[str]) -> Optional[str]:
+    key = FLEET_KEY_MAP.get((branch or "").strip().lower())
+    return f"{prefix}_{key}" if key else None
+
+
+def sync_fleet_census(cur, period_id: int, branch: Optional[str]):
+    tbl = get_fleet_table("transport_census", branch)
+    if tbl:
+        cur.execute(f"DELETE FROM {tbl} WHERE period_id = %s;", (period_id,))
+        cur.execute(
+            f"INSERT INTO {tbl} SELECT * FROM transport_census_entries WHERE period_id = %s AND LOWER(branch) = LOWER(%s);",
+            (period_id, branch or "Common")
+        )
+
+
+def sync_fleet_vehicles(cur, period_id: int, branch: Optional[str]):
+    tbl = get_fleet_table("transport_vehicles", branch)
+    if tbl:
+        cur.execute(f"DELETE FROM {tbl} WHERE period_id = %s;", (period_id,))
+        cur.execute(
+            f"INSERT INTO {tbl} SELECT * FROM transport_vehicle_entries WHERE period_id = %s AND LOWER(branch) = LOWER(%s);",
+            (period_id, branch or "Common")
+        )
+
+
+def sync_fleet_expenses(cur, period_id: int, branch: Optional[str]):
+    tbl = get_fleet_table("transport_expenses", branch)
+    if tbl:
+        cur.execute(f"DELETE FROM {tbl} WHERE period_id = %s;", (period_id,))
+        cur.execute(
+            f"""
+            INSERT INTO {tbl}
+            SELECT id, period_id, cost_head_id, vendor_id, amount, status::text, remarks, recorded_by, audited_at, created_at, updated_at, module, branch
+            FROM transport_expense_entries WHERE period_id = %s AND LOWER(branch) = LOWER(%s);
+            """,
+            (period_id, branch or "Common")
+        )
+
+
+@app.get("/api/transport/expenses/{fleet_name}")
+def get_fleet_expenses(fleet_name: str, period_id: Optional[int] = None):
+    """Returns expense entries from the dedicated per-fleet table (transport_expenses_{fleet})."""
+    tbl = get_fleet_table("transport_expenses", fleet_name)
+    if not tbl:
+        raise HTTPException(status_code=400, detail=f"Unknown fleet: {fleet_name}")
+    if period_id is not None:
+        rows = db.execute_query(f"SELECT * FROM {tbl} WHERE period_id = %s ORDER BY id;", (period_id,))
+    else:
+        rows = db.execute_query(f"SELECT * FROM {tbl} ORDER BY period_id, id;")
+    return {"status": "success", "fleet": fleet_name, "table": tbl, "data": rows}
+
+
+@app.get("/api/transport/fleet/{fleet_name}/tables")
+def get_fleet_all_tables(fleet_name: str, period_id: Optional[int] = None):
+    """Returns all 4 dedicated tables (budget, census, vehicles, expenses) for a fleet."""
+    key = FLEET_KEY_MAP.get((fleet_name or "").strip().lower())
+    if not key:
+        raise HTTPException(status_code=400, detail=f"Unknown fleet: {fleet_name}")
+    budget_rows = db.execute_query(f"SELECT * FROM transport_budget_{key} ORDER BY display_order, id;")
+    if period_id is not None:
+        census_rows = db.execute_query(f"SELECT * FROM transport_census_{key} WHERE period_id = %s;", (period_id,))
+        vehicle_rows = db.execute_query(f"SELECT * FROM transport_vehicles_{key} WHERE period_id = %s ORDER BY display_order, id;", (period_id,))
+        expense_rows = db.execute_query(f"SELECT * FROM transport_expenses_{key} WHERE period_id = %s ORDER BY id;", (period_id,))
+    else:
+        census_rows = db.execute_query(f"SELECT * FROM transport_census_{key} ORDER BY period_id;")
+        vehicle_rows = db.execute_query(f"SELECT * FROM transport_vehicles_{key} ORDER BY period_id, display_order, id;")
+        expense_rows = db.execute_query(f"SELECT * FROM transport_expenses_{key} ORDER BY period_id, id;")
+    return {
+        "status": "success",
+        "fleet": key,
+        "tables": {
+            f"transport_budget_{key}": budget_rows,
+            f"transport_census_{key}": census_rows,
+            f"transport_vehicles_{key}": vehicle_rows,
+            f"transport_expenses_{key}": expense_rows,
+        },
+    }
+
+
 @app.get("/api/transport-census/{period_id}")
 def get_transport_census_direct(period_id: int, branch: Optional[str] = "Common"):
     """
-    Returns the transport census entries & operational metrics for a specific period and branch.
+    Returns the transport census entries & operational metrics for a specific period and branch
+    from the branch's dedicated transport_census_{fleet} table (or transport_census_entries).
     """
     try:
         b_val = branch or "Common"
-        row = db.execute_query(
-            "SELECT * FROM transport_census_entries WHERE period_id = %s AND branch = %s;",
-            (period_id, b_val),
-            fetch_all=False
-        )
+        fleet_tbl = get_fleet_table("transport_census", b_val)
+        if fleet_tbl:
+            row = db.execute_query(
+                f"SELECT * FROM {fleet_tbl} WHERE period_id = %s;",
+                (period_id,),
+                fetch_all=False
+            )
+        else:
+            row = db.execute_query(
+                "SELECT * FROM transport_census_entries WHERE period_id = %s AND branch = %s;",
+                (period_id, b_val),
+                fetch_all=False
+            )
         if not row:
             return {}
         clean = {
@@ -5121,8 +5224,9 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
                     """
                 )
             else:
+                veh_tbl = get_fleet_table("transport_vehicles", b_filter) or "transport_vehicle_entries"
                 rows = db.execute_query(
-                    """
+                    f"""
                     SELECT 'all' AS period_id, tve.branch,
                            MAX(tve.vehicle_no) AS vehicle_no,
                            MAX(tve.make) AS make,
@@ -5139,7 +5243,7 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
                            SUM(tve.diesel_litres) AS diesel_litres,
                            SUM(tve.km_run) AS km_run,
                            MIN(tve.display_order) AS display_order
-                    FROM transport_vehicle_entries tve
+                    FROM {veh_tbl} tve
                     JOIN billing_periods bp ON bp.id = tve.period_id
                     WHERE bp.branch = 'all' AND LOWER(tve.branch) = LOWER(%s)
                     GROUP BY tve.branch, REGEXP_REPLACE(UPPER(REPLACE(TRIM(tve.vehicle_no), ' ', '')), 'AC$', '')
@@ -5314,13 +5418,14 @@ def get_transport_vehicles(period_id: Optional[str] = None, branch: Optional[str
                 (numeric_period_id,)
             )
         else:
+            veh_tbl = get_fleet_table("transport_vehicles", b_filter) or "transport_vehicle_entries"
             rows = db.execute_query(
-                """
+                f"""
                 SELECT id, period_id, branch, vehicle_no, make, model, 
                        fuel_expenses, fc_cost, statutory_cost, repair_maintenance, 
                        parking_fastag, cctv_replacement, employee_cost, other_cost, total_expenses, 
                        diesel_litres, km_run, mileage, display_order, remarks, created_at
-                FROM transport_vehicle_entries
+                FROM {veh_tbl}
                 WHERE period_id = %s AND LOWER(branch) = LOWER(%s)
                 ORDER BY display_order, id;
                 """,
@@ -5528,6 +5633,7 @@ def save_transport_vehicles(req: Dict[str, Any]):
                     "actual_kms": tot_km
                 }
                 compute_and_upsert_transport_census(cur, period_id, census_update, branch=branch)
+                sync_fleet_vehicles(cur, period_id, branch)
 
                 conn.commit()
 
@@ -5582,6 +5688,9 @@ def delete_transport_vehicle(vehicle_id: int):
             raise HTTPException(status_code=400, detail=f"Billing month {p_lbl} is locked (read-only). Please unlock it before deleting vehicle records.")
 
         db.execute_commit("DELETE FROM transport_vehicle_entries WHERE id = %s;", (vehicle_id,))
+        veh_tbl = get_fleet_table("transport_vehicles", branch)
+        if veh_tbl:
+            db.execute_commit(f"DELETE FROM {veh_tbl} WHERE id = %s;", (vehicle_id,))
 
         # Recalculate remaining
         remaining = db.execute_query(

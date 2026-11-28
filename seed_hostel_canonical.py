@@ -56,12 +56,12 @@ CANONICAL_HOSTEL_PARAMETERS = [
     ('', 'power_cost_occupant', 'Power cost Per occupant per month - Hostel', 'Water & Utilities Deep Dive', 6, 39, 'cost', '₹/occ', 'Power cost / Total Occupied'),
     ('', 'normal_water_litres', 'Normal Water Consumption Ltr Hostels', 'Water & Utilities Deep Dive', 6, 40, 'single_number', 'Litres', None),
     ('', 'normal_water_cost', 'Normal Water Consumption Cost Hostels', 'Water & Utilities Deep Dive', 6, 41, 'cost', 'INR (₹)', None),
-    ('', 'students_normal_water', 'No of Students in Hostels', 'Water & Utilities Deep Dive', 6, 42, 'single_count', 'Students', 'Total Students in Hostel'),
+    ('', 'students_normal_water', 'No of Staff + Students in Hostels', 'Water & Utilities Deep Dive', 6, 42, 'single_count', 'Occupants', 'Students + Staff'),
     ('', 'normal_water_ltr_day', 'Normal water Ltr per student per day - Hostels', 'Water & Utilities Deep Dive', 6, 43, 'single_number', 'L/day', 'Normal Water Ltr / Total Students / 30'),
     ('', 'normal_water_cost_day', 'Normal Water cost Per student per day Hostels', 'Water & Utilities Deep Dive', 6, 44, 'cost', '₹/day', 'Normal Water Cost / Total Students / 30'),
     ('', 'drinking_water_litres', 'Drinking Water Consumption Litres Hostels', 'Water & Utilities Deep Dive', 6, 45, 'single_number', 'Litres', None),
     ('', 'drinking_water_cost', 'Drinking Water Consumption Cost Hostels', 'Water & Utilities Deep Dive', 6, 46, 'cost', 'INR (₹)', None),
-    ('', 'students_drinking_water', 'No of Students in Hostels', 'Water & Utilities Deep Dive', 6, 47, 'single_count', 'Students', 'Total Students in Hostel'),
+    ('', 'students_drinking_water', 'No of Staff + Students in Hostels', 'Water & Utilities Deep Dive', 6, 47, 'single_count', 'Occupants', 'Students + Staff'),
     ('', 'drinking_water_ltr_day', 'Drinking water Litres per student per day- Hostels', 'Water & Utilities Deep Dive', 6, 48, 'single_number', 'L/day', 'Drinking Water Ltr / Total Students / 30'),
     ('', 'drinking_water_cost_day', 'Drinking Water cost Per student per day Hostels', 'Water & Utilities Deep Dive', 6, 49, 'cost', '₹/day', 'Drinking Water Cost / Total Students / 30')
 ]

@@ -283,7 +283,28 @@ def ensure_schema_compatibility():
         "ALTER TABLE transport_census_university ADD COLUMN IF NOT EXISTS parking_fastag NUMERIC(14, 2) DEFAULT 0.00;",
         "ALTER TABLE transport_census_common ADD COLUMN IF NOT EXISTS parking_fastag NUMERIC(14, 2) DEFAULT 0.00;",
         "ALTER TABLE transport_vehicle_entries ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(15, 2) DEFAULT 0.0;",
-        "ALTER TABLE audit_non_academic_reports ADD COLUMN IF NOT EXISTS remarks TEXT DEFAULT '';"
+        "ALTER TABLE audit_non_academic_reports ADD COLUMN IF NOT EXISTS remarks TEXT DEFAULT '';",
+        """
+        CREATE TABLE IF NOT EXISTS hostel_daily_institute_occupancy (
+            id SERIAL PRIMARY KEY,
+            s_no INT NOT NULL DEFAULT 1,
+            institute VARCHAR(100) UNIQUE NOT NULL,
+            boys INT NOT NULL DEFAULT 0,
+            girls INT NOT NULL DEFAULT 0,
+            updated_date DATE NOT NULL DEFAULT CURRENT_DATE,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS hostel_daily_bed_summary (
+            id SERIAL PRIMARY KEY,
+            s_no INT NOT NULL DEFAULT 1,
+            metric_key VARCHAR(100) UNIQUE NOT NULL,
+            metric_label VARCHAR(150) NOT NULL,
+            boys INT NOT NULL DEFAULT 0,
+            girls INT NOT NULL DEFAULT 0,
+            updated_date DATE NOT NULL DEFAULT CURRENT_DATE,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
     ]
     for stmt in stmts:
         try:
@@ -4631,6 +4652,190 @@ def save_hostel_census_bulk(req: Dict[str, Any]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
+def _build_hostel_daily_occupancy_payload():
+    inst_rows = db.execute_query(
+        "SELECT id, s_no, institute, boys, girls, updated_date, updated_at FROM hostel_daily_institute_occupancy ORDER BY s_no, id;",
+        fetch_all=True
+    ) or []
+    bed_rows = db.execute_query(
+        "SELECT id, s_no, metric_key, metric_label, boys, girls, updated_date, updated_at FROM hostel_daily_bed_summary ORDER BY s_no, id;",
+        fetch_all=True
+    ) or []
+
+    total_boys = sum(int(r.get("boys") or 0) for r in inst_rows)
+    total_girls = sum(int(r.get("girls") or 0) for r in inst_rows)
+    grand_total = total_boys + total_girls
+
+    institutes = []
+    for idx, r in enumerate(inst_rows, start=1):
+        b = int(r.get("boys") or 0)
+        g = int(r.get("girls") or 0)
+        t = b + g
+        pct = round((t / grand_total) * 100) if grand_total > 0 else 0
+        institutes.append({
+            "id": r.get("id"),
+            "s_no": int(r.get("s_no") or idx),
+            "institute": r.get("institute") or "",
+            "boys": b,
+            "girls": g,
+            "total": t,
+            "pct": pct,
+            "updated_date": str(r.get("updated_date") or ""),
+            "updated_at": str(r.get("updated_at") or ""),
+        })
+
+    bed_map = {}
+    bed_summary = []
+    for idx, r in enumerate(bed_rows, start=1):
+        b = int(r.get("boys") or 0)
+        g = int(r.get("girls") or 0)
+        key = r.get("metric_key") or ""
+        bed_map[key] = {"boys": b, "girls": g, "total": b + g}
+        bed_summary.append({
+            "id": r.get("id"),
+            "s_no": int(r.get("s_no") or idx),
+            "metric_key": key,
+            "metric_label": r.get("metric_label") or key,
+            "boys": b,
+            "girls": g,
+            "total": b + g,
+            "updated_date": str(r.get("updated_date") or ""),
+            "updated_at": str(r.get("updated_at") or ""),
+        })
+
+    bc_boys = (bed_map.get("college_bc", {}).get("boys", 0)
+               + bed_map.get("college_sports_bc", {}).get("boys", 0)
+               + bed_map.get("school_students_bc", {}).get("boys", 0))
+    bc_girls = (bed_map.get("college_bc", {}).get("girls", 0)
+                + bed_map.get("college_sports_bc", {}).get("girls", 0)
+                + bed_map.get("school_students_bc", {}).get("girls", 0))
+    occ_boys = (bed_map.get("college_students_occ", {}).get("boys", 0)
+                + bed_map.get("staff_occ", {}).get("boys", 0)
+                + bed_map.get("college_sports_occ", {}).get("boys", 0)
+                + bed_map.get("kpm_hostel_staff_occ", {}).get("boys", 0)
+                + bed_map.get("school_students_occ", {}).get("boys", 0))
+    occ_girls = (bed_map.get("college_students_occ", {}).get("girls", 0)
+                 + bed_map.get("staff_occ", {}).get("girls", 0)
+                 + bed_map.get("college_sports_occ", {}).get("girls", 0)
+                 + bed_map.get("kpm_hostel_staff_occ", {}).get("girls", 0)
+                 + bed_map.get("school_students_occ", {}).get("girls", 0))
+
+    latest_date = ""
+    latest_at = ""
+    for r in inst_rows + bed_rows:
+        d = str(r.get("updated_date") or "")
+        a = str(r.get("updated_at") or "")
+        if d > latest_date:
+            latest_date = d
+        if a > latest_at:
+            latest_at = a
+
+    return {
+        "institutes": institutes,
+        "institutes_totals": {"boys": total_boys, "girls": total_girls, "total": grand_total},
+        "bed_summary": bed_summary,
+        "summary_totals": {
+            "bed_capacity": {"boys": bc_boys, "girls": bc_girls, "total": bc_boys + bc_girls},
+            "occ_total": {"boys": occ_boys, "girls": occ_girls, "total": occ_boys + occ_girls},
+            "vacant": {
+                "boys": bc_boys - occ_boys,
+                "girls": bc_girls - occ_girls,
+                "total": (bc_boys + bc_girls) - (occ_boys + occ_girls),
+            },
+        },
+        "updated_date": latest_date or str(date.today()),
+        "updated_at": latest_at,
+    }
+
+
+@app.get("/api/hostel/daily-occupancy")
+def get_hostel_daily_occupancy():
+    """
+    Returns the daily (non-month-scoped) Institute Wise Occupied and Bed Capacity/Occupancy summary.
+    """
+    try:
+        return _build_hostel_daily_occupancy_payload()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/hostel/daily-occupancy")
+def save_hostel_daily_occupancy(req: Dict[str, Any]):
+    """
+    Saves daily (non-month-scoped) Institute Wise Occupied and Bed Capacity/Occupancy summary.
+    """
+    try:
+        institutes = req.get("institutes") or []
+        bed_summary = req.get("bed_summary") or []
+        updated_date = str(req.get("updated_date") or date.today())
+
+        conn = db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                if isinstance(institutes, list):
+                    cur.execute("DELETE FROM hostel_daily_institute_occupancy;")
+                    for idx, item in enumerate(institutes, start=1):
+                        inst_name = str(item.get("institute") or "").strip()
+                        if not inst_name:
+                            continue
+                        boys = int(float(item.get("boys") or 0))
+                        girls = int(float(item.get("girls") or 0))
+                        s_no = int(item.get("s_no") or idx)
+                        cur.execute(
+                            """
+                            INSERT INTO hostel_daily_institute_occupancy (s_no, institute, boys, girls, updated_date, updated_at)
+                            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                            ON CONFLICT (institute) DO UPDATE SET
+                                s_no = EXCLUDED.s_no,
+                                boys = EXCLUDED.boys,
+                                girls = EXCLUDED.girls,
+                                updated_date = EXCLUDED.updated_date,
+                                updated_at = CURRENT_TIMESTAMP;
+                            """,
+                            (s_no, inst_name, boys, girls, updated_date),
+                        )
+
+                if isinstance(bed_summary, list) and len(bed_summary) > 0:
+                    for idx, item in enumerate(bed_summary, start=1):
+                        m_key = str(item.get("metric_key") or "").strip()
+                        m_label = str(item.get("metric_label") or m_key).strip()
+                        if not m_key:
+                            continue
+                        boys = int(float(item.get("boys") or 0))
+                        girls = int(float(item.get("girls") or 0))
+                        s_no = int(item.get("s_no") or idx)
+                        cur.execute(
+                            """
+                            INSERT INTO hostel_daily_bed_summary (s_no, metric_key, metric_label, boys, girls, updated_date, updated_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                            ON CONFLICT (metric_key) DO UPDATE SET
+                                s_no = EXCLUDED.s_no,
+                                metric_label = EXCLUDED.metric_label,
+                                boys = EXCLUDED.boys,
+                                girls = EXCLUDED.girls,
+                                updated_date = EXCLUDED.updated_date,
+                                updated_at = CURRENT_TIMESTAMP;
+                            """,
+                            (s_no, m_key, m_label, boys, girls, updated_date),
+                        )
+                conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            db.release_db_connection(conn)
+
+        payload = _build_hostel_daily_occupancy_payload()
+        payload["status"] = "success"
+        payload["message"] = "Daily Institute Wise Occupied & Bed Summary saved successfully"
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/hostel/budget-tracking")

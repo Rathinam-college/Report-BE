@@ -815,6 +815,56 @@ MIGRATION_STEPS = [
             """
             for fk in ("kpm", "rps", "university", "common")
         ])
+    ),
+    (
+        "Hostel Daily Institute Occupancy & Bed Summary Tables",
+        """
+        CREATE TABLE IF NOT EXISTS hostel_daily_institute_occupancy (
+            id SERIAL PRIMARY KEY,
+            s_no INT NOT NULL DEFAULT 1,
+            institute VARCHAR(100) UNIQUE NOT NULL,
+            boys INT NOT NULL DEFAULT 0,
+            girls INT NOT NULL DEFAULT 0,
+            updated_date DATE NOT NULL DEFAULT CURRENT_DATE,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO hostel_daily_institute_occupancy (s_no, institute, boys, girls)
+        SELECT v.s_no, v.institute, v.boys, v.girls
+        FROM (VALUES
+            (1, 'RTC', 1400, 596),
+            (2, 'RGU', 1204, 405),
+            (3, 'RCP', 27, 34),
+            (4, 'RPhar', 47, 33),
+            (5, 'Law', 17, 6),
+            (6, 'RPS', 1, 0),
+            (7, 'KPM', 34, 0)
+        ) AS v(s_no, institute, boys, girls)
+        WHERE NOT EXISTS (SELECT 1 FROM hostel_daily_institute_occupancy LIMIT 1);
+
+        CREATE TABLE IF NOT EXISTS hostel_daily_bed_summary (
+            id SERIAL PRIMARY KEY,
+            s_no INT NOT NULL DEFAULT 1,
+            metric_key VARCHAR(100) UNIQUE NOT NULL,
+            metric_label VARCHAR(150) NOT NULL,
+            boys INT NOT NULL DEFAULT 0,
+            girls INT NOT NULL DEFAULT 0,
+            updated_date DATE NOT NULL DEFAULT CURRENT_DATE,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO hostel_daily_bed_summary (s_no, metric_key, metric_label, boys, girls)
+        SELECT v.s_no, v.metric_key, v.metric_label, v.boys, v.girls
+        FROM (VALUES
+            (1, 'college_bc', 'College BC', 2895, 1304),
+            (2, 'college_students_occ', 'College Students Occ', 2623, 1074),
+            (3, 'staff_occ', 'Staff Occ', 82, 73),
+            (4, 'college_sports_bc', 'College Sports Students BC', 96, 0),
+            (5, 'college_sports_occ', 'College Sports Students Occ', 72, 0),
+            (6, 'kpm_hostel_staff_occ', 'KPM Hostel Staff Occ', 20, 0),
+            (7, 'school_students_bc', 'School Students BC', 46, 0),
+            (8, 'school_students_occ', 'School Students Occ', 34, 0)
+        ) AS v(s_no, metric_key, metric_label, boys, girls)
+        WHERE NOT EXISTS (SELECT 1 FROM hostel_daily_bed_summary LIMIT 1);
+        """
     )
 ]
 

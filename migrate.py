@@ -754,6 +754,19 @@ MIGRATION_STEPS = [
             remarks TEXT DEFAULT '',
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS audit_master_departments (
+            id SERIAL PRIMARY KEY,
+            topic VARCHAR(60) NOT NULL DEFAULT 'internal_report',
+            s_no INT NOT NULL DEFAULT 1,
+            department VARCHAR(200) NOT NULL,
+            default_auditees TEXT DEFAULT '',
+            default_criteria VARCHAR(200) DEFAULT 'QMS - 9001:2015',
+            default_cycle_no VARCHAR(50) DEFAULT '12',
+            display_order INT NOT NULL DEFAULT 1,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (topic, department)
+        );
         """
     ),
     (
@@ -869,7 +882,253 @@ def run_migrations():
     except Exception as sf_e:
         print(f"  [WARNING] Transport Per-Fleet Sync skipped: {sf_e}")
 
+    try:
+        seed_audit_master_and_initial_data()
+    except Exception as au_e:
+        print(f"  [WARNING] Audit Master Seeding skipped: {au_e}")
+
     return True
+
+
+def seed_audit_master_and_initial_data():
+    """Seeds audit_master_departments and initial Oct-26 Internal Audit rows if empty."""
+    conn = db.get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            internal_depts = [
+                (1, "Hostel - 1 (Sabari Hospitality)", "", "QMS - 9001:2015", "12"),
+                (2, "Hostel - 2 (Clean 4 U)", "", "QMS - 9001:2015", "12"),
+                (3, "Food", "", "QMS - 9001:2015", "12"),
+                (4, "Transport", "", "QMS - 9001:2015", "12"),
+            ]
+            for s_no, dept, auditees, criteria, cyc in internal_depts:
+                cur.execute(
+                    """
+                    INSERT INTO audit_master_departments (topic, s_no, department, default_auditees, default_criteria, default_cycle_no, display_order)
+                    VALUES ('internal_report', %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (topic, department) DO NOTHING;
+                    """,
+                    (s_no, dept, auditees, criteria, cyc, s_no),
+                )
+
+            na_depts = [
+                (1, "KPM", "Mrs.Akhilaa Vellalar / Mrs.Kanimozhi"),
+                (2, "RPS", "Mrs.Sankari KN / Mr. William Ebenezar"),
+                (3, "RCAS (Chanakya & CV raman block)", "Mr.Dhinakaran / Mr.Balasubramanian"),
+                (4, "RTC (A,B&C block)", "Mrs.K Geetha /Mr.Jayabal"),
+                (5, "PHARMACY", "Dr.Syed Shajahan /Mr.Adarvana Sampath / Mr.Balakrishnan N"),
+                (6, "PHYSIOTHERAPHY", "Dr.Syed Shajahan / Mr.Syed Abudaheer / Mrs.Umadevi"),
+                (7, "TIPS", "Mr.Syed Shajahan / Mr.Chandrasekar"),
+                (8, "ZIA", "Mrs.Abinaya / Mrs.Sharon"),
+                (9, "HR", "Mr.Vanji Muthu Kumar K"),
+                (10, "Stores", "Mrs.Nageshwari/ Mr. William Ebenezar/ Mrs. Abinaya"),
+                (11, "IT&CCTV", "Mr. Sunil / Mr. Senthil Kumar / Mr. Ramakrishnan Babu/ Mr. Manimaran"),
+            ]
+            for topic in ("non_academic_report", "non_academic_schedule"):
+                for s_no, dept, auditees in na_depts:
+                    cur.execute(
+                        """
+                        INSERT INTO audit_master_departments (topic, s_no, department, default_auditees, default_criteria, default_cycle_no, display_order)
+                        VALUES (%s, %s, %s, %s, 'Non-Academic Audit', '', %s)
+                        ON CONFLICT (topic, department) DO NOTHING;
+                        """,
+                        (topic, s_no, dept, auditees, s_no),
+                    )
+
+            # Ensure Audit module has its own billing_periods (Jun'26 - Oct'26)
+            audit_months = [
+                ("2026-06", "Jun'26", "2026-06-01", "2026-06-30", 30),
+                ("2026-07", "Jul'26", "2026-07-01", "2026-07-31", 31),
+                ("2026-08", "Aug'26", "2026-08-01", "2026-08-31", 31),
+                ("2026-09", "Sept'26", "2026-09-01", "2026-09-30", 30),
+                ("2026-10", "Oct'26", "2026-10-01", "2026-10-31", 31),
+            ]
+            cur.execute("SELECT id FROM fiscal_years ORDER BY id DESC LIMIT 1;")
+            fy_row = cur.fetchone()
+            fy_id = fy_row[0] if fy_row else 1
+            for p_code, p_lbl, s_dt, e_dt, op_days in audit_months:
+                cur.execute(
+                    "SELECT id FROM billing_periods WHERE module = 'audit' AND period_code = %s LIMIT 1;",
+                    (p_code,),
+                )
+                if not cur.fetchone():
+                    cur.execute(
+                        """
+                        INSERT INTO billing_periods (fiscal_year_id, period_code, period_label, start_date, end_date, operating_days, is_closed, module, branch)
+                        VALUES (%s, %s, %s, %s, %s, %s, FALSE, 'audit', 'all');
+                        """,
+                        (fy_id, p_code, p_lbl, s_dt, e_dt, op_days),
+                    )
+
+            # Seed Oct-26 Internal Audit Consolidated Report rows on Audit's 2026-10 period if empty or still on food period
+            cur.execute(
+                "SELECT id FROM billing_periods WHERE module = 'audit' AND period_code = '2026-10' ORDER BY id LIMIT 1;"
+            )
+            p_row = cur.fetchone()
+            if p_row:
+                oct_pid = p_row[0]
+                cur.execute("SELECT COUNT(*) FROM audit_internal_reports WHERE period_id = %s;", (oct_pid,))
+                if cur.fetchone()[0] == 0:
+                    cur.execute("DELETE FROM audit_internal_reports WHERE period_id = 311 AND cycle_no = '12';")
+                    seed_int = [
+                        (1, "Hostel - 1 (Sabari Hospitality)", "Completed", 90),
+                        (2, "Hostel - 2 (Clean 4 U)", "Completed", 88),
+                        (3, "Food", "", 0),
+                        (4, "Transport", "", 0),
+                    ]
+                    for s_no, dept, status, score in seed_int:
+                        cur.execute(
+                            """
+                            INSERT INTO audit_internal_reports (period_id, cycle_no, criteria, s_no, department, status, total_scores, remarks)
+                            VALUES (%s, '12', 'QMS - 9001:2015', %s, %s, %s, %s, '');
+                            """,
+                            (oct_pid, s_no, dept, status, score),
+                        )
+
+                # Seed Oct-26 Non-Academic Audit Consolidated Report rows if empty for oct_pid
+                cur.execute("SELECT COUNT(*) FROM audit_non_academic_reports WHERE period_id = %s;", (oct_pid,))
+                if cur.fetchone()[0] == 0:
+                    seed_na_rep = [
+                        (1, "KPM", "Mrs.Akhilaa Vellalar / Mrs.Kanimozhi", "98", "100", "100", "N/A", "100", "96", "97", "100", "N/A", "100", 791, 99),
+                        (2, "RPS", "Mrs.Sankari KN / Mr. William Ebenezar", "98", "97", "100", "70", "100", "95", "97", "98", "100", "100", 956, 96),
+                        (3, "RCAS (Chanakya & CV raman block)", "Mr.Dhinakaran / Mr.Balasubramanian", "98", "99", "97", "100", "100", "96", "97", "100", "N/A", "100", 887, 99),
+                        (4, "RTC (A,B&C block)", "Mrs.K Geetha /Mr.Jayabal", "100", "100", "100", "100", "100", "96", "100", "100", "N/A", "100", 896, 100),
+                        (5, "PHARMACY", "Mr.Syed Shajahan /Mr.Adarvana Sampath / Mr.Balakrishnan N", "97", "100", "N/A", "N/A", "100", "98", "N/A", "100", "N/A", "100", 595, 99),
+                        (6, "PHYSIOTHERAPHY", "Mr.Syed Shajahan / Mr.Syed Abudaheer / Mrs.Umadevi", "97", "100", "100", "N/A", "N/A", "98", "100", "100", "100", "100", 795, 99),
+                        (7, "TIPS", "Mr.Syed Shajahan / Mr.Chandrasekar", "N/A", "N/A", "N/A", "N/A", "N/A", "69", "N/A", "N/A", "N/A", "N/A", 69, 69),
+                        (8, "ZIA", "Mrs.Abinaya / Mrs.Sharon", "87", "97", "93", "N/A", "100", "90", "89", "100", "100", "N/A", 756, 95),
+                        (9, "HR", "Mr.Vanji Muthu Kumar K", "", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", 0, 0),
+                        (10, "Stores", "Mrs.Nageshwari/ Mr. William Ebenezar/ Mrs. Abinaya", "90", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", 90, 90),
+                        (11, "IT&CCTV", "Mr. Sunil / Mr. Senthil Kumar / Mr. Ramakrishnan Babu/ Mr. Manimaran", "89", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", 89, 89),
+                    ]
+                    for (s_no, dept, aud, adm, mnt, eqp, caf, sinf, trp, sec, rst, sb, lib, tot, pct) in seed_na_rep:
+                        cur.execute(
+                            """
+                            INSERT INTO audit_non_academic_reports (
+                                period_id, s_no, department, auditees,
+                                admin_score, maintenance_support, equipment_maintenance, cafeteria,
+                                site_infra, transport, security, restroom, sick_bay, library,
+                                total_score, score_pct
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                            """,
+                            (oct_pid, s_no, dept, aud, adm, mnt, eqp, caf, sinf, trp, sec, rst, sb, lib, tot, pct),
+                        )
+
+                # Seed Oct-26 Non-Academic Audit Schedule rows if empty for oct_pid
+                cur.execute("SELECT COUNT(*) FROM audit_non_academic_schedules WHERE period_id = %s;", (oct_pid,))
+                if cur.fetchone()[0] == 0:
+                    seed_na_sch = [
+                        (1, "KPM", "Mrs.Akhilaa Vellalar / Mrs.Kanimozhi", "06.10.2026", "10 am - 5pm", "Sriram/ Kiruthika", "07.10.2026 / completed", ""),
+                        (2, "RPS", "Mrs.Sankari KN / Mr. William Ebenezar", "07.10.2026 & 08.10.2026", "10 am - 5pm", "Sriram/ Kiruthika", "09.10.2026 / completed", ""),
+                        (3, "RGU (Chanakya & CV raman block)", "Dr Krishnaraj C /Dr.Dhinakaran / Mr. Subhash", "09.10.2026", "10 am - 5pm", "Sriram/ Kiruthika", "28.10.2026/ completed", ""),
+                        (4, "RTC (A,B&C block)", "Dr.K Geetha /Mr.Jayabal", "10.10.2026", "10 am - 5pm", "Sriram/ Kiruthika", "15.10.2026 / completed", ""),
+                        (5, "PHARMACY", "Dr.Syed Shajahan /Mr.Adarvana Sampath / Mr.Balakrishnan N", "12.10.2026", "10 am - 5pm", "Sriram/ Kiruthika", "12.10.2026 / completed", ""),
+                        (6, "PHYSIOTHERAPHY", "Dr.Syed Shajahan / Mr.Syed Abudaheer / Mrs.Umadevi", "13.10.2026", "10 am - 5pm", "Sriram/ Kiruthika", "14.10.2026 / completed", ""),
+                        (7, "HR", "Mr.Vanji Muthu Kumar K / Mr. yogeshwaran", "14.10.2026", "10 am - 5pm", "Sriram/ Kiruthika", "In-progress", ""),
+                        (8, "Stores", "Mr.Kannappan", "15.10.2026", "10 am - 5pm", "Sriram/ Kiruthika", "24.10.2026 / completed", ""),
+                        (9, "IT & CCTV", "Mr. Sunil / Mr. Senthil Kumar / Mr. Ramakrishnan Babu/ Mr. Manimaran", "16.10.2026", "10 am - 5pm", "Sriram/ Kiruthika", "22.10.2026 / completed", ""),
+                        (10, "TIPS", "Mr.Chandrasekar / Amul K", "17.10.2026", "10 am - 5pm", "Sriram/ Kiruthika", "17.10.2026 / completed", ""),
+                        (11, "ZIA", "Mrs. Andrea Gabrielia Lazarus / Mrs.Abinaya", "21.10.2026", "10 am - 5pm", "Sriram/ Kiruthika", "30.10.2026/ completed", ""),
+                    ]
+                    for s_no, dept, aud, p_dt, tm, audr, st, rem in seed_na_sch:
+                        cur.execute(
+                            """
+                            INSERT INTO audit_non_academic_schedules (
+                                period_id, s_no, department, auditees, planned_date, time_slot, auditors, status, remarks
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                            """,
+                            (oct_pid, s_no, dept, aud, p_dt, tm, audr, st, rem),
+                        )
+
+                # Seed Oct-26 NA - Non-Conformity Consolidated Tracker 2026 if empty for oct_pid
+                cur.execute("SELECT COUNT(*) FROM audit_nc_tracker WHERE period_id = %s;", (oct_pid,))
+                if cur.fetchone()[0] == 0:
+                    seed_nc = [
+                        (1, "KPM", "09.10.2026", "Housekeeping staff accommodation near the KPM classroom, including the restrooms, surrounding area, and washing area, was found to be poorly maintained and unhygienic.", "Kanimozhi", "Area was cleaned and accommodated staffs will be shifted soon", "31.10.2026", "In Progress"),
+                        (2, "KPM", "09.10.2026", "Open of wires in principal office,Inside the School Permises Wiring to be Done.", "Kanimozhi", "Maintenance team reviewed and waiting for quotation", "31.10.2026", "In Progress"),
+                        (3, "KPM", "09.10.2026", "Antiskid tape need to placed on staircase(Quote Received ,After Board Exams Will be Completed )", "Kanimozhi", "Anti skip tape is waiting for principal mam approval. Rubber mats is planned to buy by next month", "31.10.2026", "In Progress"),
+                        (4, "KPM", "09.10.2026", "Drivers Uniforms not given for KPM Drivers", "Nandha Kumar", "Uniform measurement taken for New Drivers .Waiting to recieve uniform from Vendor", "20.11.2026", "Closed"),
+                        (5, "RPS", "10.10.2026", "Medicine stock list with expiry date need to update & maintain", "Wiilams", "medicine list is maintained & register is maintained", "31.10.2026", "Closed"),
+                        (6, "RPS", "10.10.2026", "Emergenct contact no need to Display in security cabin", "Wiilams", "Emergency contact number is displayed", "31.10.2026", "Closed"),
+                        (7, "RPS", "10.10.2026", "For girls restroom checklist isupdated & maintained. But boys restroom checklist not updated for first, second floor", "Wiilams", "Boys restroom checklist is updated and it will be followup for upcoming months", "31.10.2026", "Closed"),
+                        (8, "RPS", "10.10.2026", "Daily Taste report need to update & maintain", "Wiilams", "Taste register is updated and maintained", "31.10.2026", "Closed"),
+                        (9, "RPS", "10.10.2026", "Daily food Temperature Monitoring report need to create & maintain", "Wiilams", "Food temperature register is implemented and maintained", "31.10.2026", "Closed"),
+                        (10, "RPS", "10.10.2026", "Vehicle no: 8174,2061, 7922, 8947 - camera not working, 8636 - cable problem", "Henry", "Quotation got from vendor. waiting for processing", "31.10.2026", "In Progress"),
+                        (11, "RPS", "10.10.2026", "Drivers details need to display in all vehicle", "Henry", "Drivers details is maintained but need to display", "31.10.2026", "In Progress"),
+                        (12, "RPS", "10.10.2026", "TN 99 Z 4505 - Insurance & fitness copy not available in the vehicle", "Henry", "TN 99 Z 4505 - Insurance & fitness copy available in the vehicle", "31.10.2026", "In Progress"),
+                        (13, "RPS", "10.10.2026", "TN 99 AC 2234 - Insurance, Pollution & fitness copy not available in the vehicle", "Henry", "TN 99 AC 2234 - Insurance, Pollution & fitness copy available in the vehicle", "31.10.2026", "In Progress"),
+                        (14, "RPS", "10.10.2026", "TN 99 AB 8636 - Fitness copy not available in the vehicle", "Henry", "TN 99 AB 8636 - Fitness copy available in the vehicle", "31.10.2026", "In Progress"),
+                        (15, "RPS", "10.10.2026", "TN 99 AA 8200 - Insurance & fitness copy not available in the vehicle", "Henry", "TN 99 AA 8200 - Insurance & fitness copy available in the vehicle", "31.10.2026", "In Progress"),
+                        (16, "RPS", "10.10.2026", "TN 99 X 1663 - Insurance, fitness & permit copy not available in the vehicle", "Henry", "TN 99 X 1663 - Insurance, fitness & permit copy available in the vehicle", "31.10.2026", "In Progress"),
+                        (17, "RPS", "10.10.2026", "TN 99 A 8174 & TN 37 BX 5141 - Fitness copy not available in the vehicle", "Henry", "TN 99 A 8174 & TN 37 BX 5141 - Fitness copy available in the vehicle", "31.10.2026", "In Progress"),
+                        (18, "RPS", "10.10.2026", "observation: Allergy details are available in the respective students' admission forms. However, a separate allergy list for students should be maintained", "Wiilams", "In Admission forms mentioned the allergy details of concern students but list not taken", "31.10.2026", "In Progress"),
+                        (19, "RPS", "10.10.2026", "Observation: Anti skid tape & Rubber mats need to placed at Swimming Pool", "Wiilams", "Anti skip tape is waiting for principal mam approval.", "30.01.2026", "In Progress"),
+                        (20, "RPS", "10.10.2026", "Observation: SOP for admin process need to implement & maintain", "Wiilams", "Created draft copy and it will be implemented soon", "30.11.2026", "In Progress"),
+                        (21, "RPS", "10.10.2026", "Observation: Depth Marks of Pool are Not Marked", "Wiilams", "It will be marked when water is fully removed from the pool", "30.01.2026", "In Progress"),
+                        (22, "RPS", "10.10.2026", "Observation: water sample is given for lab test", "Wiilams", "Report will be received by this month", "30.11.2026", "In Progress"),
+                        (23, "RPS", "10.10.2026", "Observation:The Anti-Ragging, POSH, and Food Committee lists are available; however, they need to be updated with the names of the currently available staff members with updated dates.", "Wiilams", "Updated all list with currently available staffs", "31.10.2026", "In Progress"),
+                        (24, "RTC", "15.10.2026", "Observation: Floor Wise Evacuation Map to be Maintained", "Jayabal", "Evacuation Map is on Progress will be Displayed", "30.12.2026", "In Progress"),
+                        (25, "RTC", "15.10.2026", "Observation: First aid medicine tracker need to update & maintain", "Jayabal", "First aid Box placed register Will be Maintained", "31.10.2026", "Closed"),
+                        (26, "RTC", "15.10.2026", "Student Details route wise need to display in all vehicle", "Jayabal& Nandhakumar", "Student Details route wise is under preparation", "31.10.2026", "Closed"),
+                        (27, "RTC", "15.10.2026", "Driver's details need to displayed", "Jayabal& Nandhakumar", "Driver's details need to prepared and maintained", "31.10.2026", "Closed"),
+                        (28, "RTC", "15.10.2026", "CCTV recording need to checked and maintained all vehicles", "Jayabal& Nandhakumar", "CCTV recording checked by manager", "31.10.2026", "Closed"),
+                        (29, "Physio", "14.10.2026", "In ladies restrooms -> Health faucet need to cleaned and maintained", "Uma", "Health faucet has been cleaned and Maintained", "30.10.2026", "Closed"),
+                        (30, "Physio", "14.10.2026", "Floor Wise Evacuation Map need to create and display on each floor", "Uma", "Floor Wise Evacuation Map need is under preparation & implemented soon", "30.12.2026", "In Progress"),
+                        (31, "Physio", "14.10.2026", "Observation: Antiskid tape to be placed waiting for approval", "Uma", "After approval it will be implemented", "30.12.2026", "In Progress"),
+                        (32, "Physio", "14.10.2026", "Driver's details need to display", "Uma", "Drivers details is maintained but need to display", "30.10.2026", "Closed"),
+                        (33, "RGU", "28.10.2026", "Observation - Due to Manpower Shortage, cleaning work not carried out properly. Class room cleaning is done but mopping not done", "Subhash", "Concern entity incharge informed to HK manager about the concern. It will be followed & rectified soon", "31.10.2026", "Closed"),
+                        (34, "RGU", "28.10.2026", "Observation: Floor Wise Evacuation Map need to be displayed", "Subhash", "Floor Wise Evacuation Map need is under preparation & implemented soon", "31.10.2026", "In Progress"),
+                        (35, "RGU", "28.10.2026", "Emergency Contact Numbers to be Displayed at staff room & labs", "Subhash", "Emeregency contact is Prepared & will be displayed by next month", "31.10.2026", "In Progress"),
+                        (36, "RGU", "28.10.2026", "Common area checklist need to be followed", "Subhash", "Checklist need to Update and Implemented", "31.10.2026", "Closed"),
+                        (37, "RGU", "28.10.2026", "HK Cleaning Checklist not Updated for CV Raman Block", "Subhash", "HK Cleaning Checklist will be Updated for October Month", "31.10.2026", "Closed"),
+                        (38, "RGU", "28.10.2026", "Class room keys maintained by dept heads. List need to maintained by admin", "Subhash", "Class room keys list will be taken & maintained", "31.10.2026", "In Progress"),
+                        (39, "RGU", "28.10.2026", "Authorized list need to be displayed in electrical panel door in groundfloor", "Subhash", "Authorized Display board need to displayed", "31.10.2026", "In Progress"),
+                        (40, "RGU", "28.10.2026", "Drivers details need to display", "Balaji", "Drivers details need to diplayed", "31.10.2026", "Closed"),
+                        (41, "Pharmacy", "12.10.2026", "Floor wise evacuation map need to create and displayed on each floor", "Sampath", "Floor Wise Evacuation Map need is under preparation & implemented soon", "31.11.2026", "In Progress"),
+                        (42, "Pharmacy", "12.10.2026", "Weekly once review done by AO & Ticketing sytem is maintained as record. 1. In first floor, Near to the lift, open space area door jamb found broken. Need to be fixed", "Sampath", "Ticket is raised and it will closed soon", "31.10.2026", "Closed"),
+                        (43, "Pharmacy", "12.10.2026", "Driver's details need to display in the bus", "Sampath", "Drivers details is maintained but need to display", "31.10.2026", "Closed"),
+                        (64, "ZIA", "31.10.2026", "Security Training Records and Calender to be Updated", "Abinaya", "Security Training has been Given Record Not Found", "15.11.2026", "In Progress"),
+                        (65, "ZIA", "31.10.2026", "Floorwise Evacuation map not Available", "Abinaya", "Fire evacuation plan need to prepared and maintain", "15.11.2026", "In Progress"),
+                        (66, "ZIA", "31.10.2026", "Fire Extinguisher Awareness to be Done Properly", "Abinaya", "Fire Extinguisher Training Will be Provided within this Month Discussion With Vendor", "15.11.2026", "In Progress"),
+                        (67, "ZIA", "31.10.2026", "Pool Depth Mark not done", "Abinaya", "Maintenance Ticket has been Raised", "15.11.2026", "In Progress"),
+                        (68, "ZIA", "31.10.2026", "Agreement Copies of Buildings are not available", "Abinaya", "Agreement copies of building available with management", "15.11.2026", "In Progress"),
+                        (69, "ZIA", "31.10.2026", "Construction ,Fire Safety Drawing not available", "Abinaya", "Construction ,Fire Safety Drawing available with management", "15.11.2026", "In Progress"),
+                        (71, "ZIA", "31.10.2026", "Building insurance not avaialable ,", "Abinaya", "Building Insurance copy has been Requested With Mr. Vijayakumar .Follow up on Progress", "15.11.2026", "In Progress"),
+                        (72, "ZIA", "31.10.2026", "Housekeeping Training and schedule not followed", "Abinaya", "Housekeeping Training and schedule need to implement", "15.11.2026", "In Progress"),
+                        (73, "ZIA", "31.10.2026", "MOM With Security staff to be Updated", "Abinaya", "MOM record to be updated", "15.11.2026", "In Progress"),
+                        (74, "ZIA", "31.10.2026", "CCTV Not Available", "Abinaya", "CCTV Will be Installed in Every cabs after discussion with vendors", "15.11.2026", "In Progress"),
+                        (75, "ZIA", "31.10.2026", "Route List not Displayed", "Abinaya", "Route List Will be Displayed in Every Vehicle", "15.11.2026", "In Progress"),
+                        (76, "ZIA", "31.10.2026", "Rules and Regulations not displayed", "Abinaya", "Rules and Regulations will be Displayed at Cabs", "15.11.2026", "In Progress"),
+                        (78, "TIPS", "17.10.2026", "TN 38 CQ 4848 ,TN 38 DF 6112,-TN 99 Q 8166, TN 41 AD 3600,TN 38 CT 0037 - CCTV Not in working", "Chandrasekar", "Informed to Transport Manager", "30.11.2026", "In Progress"),
+                        (79, "TIPS", "17.10.2026", "Copy of RC book not available in any vehicle", "Chandrasekar", "Updated Soft Copy will be Kept in vehicle", "15.11.2026", "In Progress"),
+                        (80, "TIPS", "17.10.2026", "Copy of Vehicle Insurance not available in any vehicle", "Chandrasekar", "Updated Soft Copy will be Kept in vehicle", "15.11.2026", "In Progress"),
+                        (81, "TIPS", "17.10.2026", "Copy of Vehicle Road Tax Paid not available in any vehicle", "Chandrasekar", "Updated Soft Copy will be Kept in vehicle", "15.11.2026", "In Progress"),
+                        (82, "TIPS", "17.10.2026", "Copy of Vehicle Fitness certificate not available in any vehicle", "Chandrasekar", "Updated Soft Copy will be Kept in vehicle", "15.11.2026", "In Progress"),
+                        (83, "TIPS", "17.10.2026", "Copy of Vehicle Permit copy not available in any vehicle", "Chandrasekar", "Updated Soft Copy will be Kept in vehicle", "15.11.2026", "In Progress"),
+                        (84, "TIPS", "17.10.2026", "Copy of PUC-Pollution under Control certificate not available in any vehicle", "Chandrasekar", "Updated Soft Copy will be Kept in vehicle", "15.11.2026", "In Progress"),
+                        (85, "TIPS", "17.10.2026", "Incident register not available", "Chandrasekar", "Incident register Format Given and Explained", "15.11.2026", "In Progress"),
+                        (86, "TIPS", "17.10.2026", "MOM with Drivers & Vendor need to maintain", "Chandrasekar", "Minutes of Meeting has been Conducted .Record will be updated after next meeting", "15.11.2026", "In Progress"),
+                        (87, "TIPS", "17.10.2026", "Log Book / Feedback Register need to maintain", "Chandrasekar", "Feedback register Available .Will be Maintained", "15.11.2026", "In Progress"),
+                        (88, "IT &CCTV", "22.10.2026", "Rack Dressing and Cable Tagging work inprogress", "Prabhu", "Rack Dressing on Progress", "30.11.2026", "In Progress"),
+                        (89, "IT &CCTV", "22.10.2026", "Tempreature to be Monitor", "Prabhu", "Install & maintain a suitable temperature monitoring system and record server-room temperature.", "30.11.2026", "In Progress"),
+                        (90, "IT &CCTV", "22.10.2026", "5 Cameras recording are not Done", "Manimaran", "Vendor Working on Progress need to Verify 5 Cameras", "30.11.2026", "In Progress"),
+                        (91, "Stores", "24.10.2026", "Material Requistion slip: 1. Indent no: 1459 date: 26.09.2026, dept: Project, Surface light 18W - 12 qty. 2. Indent no: 1452 date: 11.09.2026, dept: Project, Tube light - 4qty. 3. Indent no: 1319 date: 25.09.2026, 3M cover plate - Havelles- 1qty, Maintenance dept, location: Kings 4. 4. Indent no: 1316 date: 11.09.2026, dept: maintenance, Location: Kings2, Fan head - 3qty. Observation: Issued by sign need to be followed in all Material requisition slip.", "Kannappan", "Issued sign is done and it will be followed & maintained", "30.10.2026", "Closed"),
+                        (92, "Stores", "24.10.2026", "Security and stores inward seal is followed in all inward documents but for outward seal is not maintained.", "Kannappan", "Outward seal maintained in main gate. Need to get approval for maintaining in stores", "30.10.2026", "In Progress"),
+                    ]
+                    for s_no, dept, nc_dt, desc, resp, act, t_dt, st in seed_nc:
+                        cur.execute(
+                            """
+                            INSERT INTO audit_nc_tracker (
+                                period_id, s_no, nc_no, department, area, nc_description,
+                                corrective_action, responsible_person, target_date, status
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                            """,
+                            (oct_pid, s_no, f"NC-{s_no}", dept, nc_dt, desc, act, resp, t_dt, st),
+                        )
+        conn.commit()
+        print("  [OK] Audit Master Departments & Initial Oct-26 Data Seeded")
+    finally:
+        db.release_db_connection(conn)
 
 
 def sync_all_transport_fleet_tables():

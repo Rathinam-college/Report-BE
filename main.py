@@ -8,7 +8,7 @@ import shutil
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any, Union
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 import re
 import json
@@ -6267,6 +6267,107 @@ def get_audit_4topic_summary(period_id: str = "all"):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audit/master-departments")
+def get_audit_master_departments(topic: Optional[str] = None):
+    try:
+        if topic and topic != "all":
+            rows = db.execute_query(
+                "SELECT * FROM audit_master_departments WHERE topic = %s ORDER BY display_order ASC, s_no ASC, id ASC;",
+                (topic,),
+            )
+        else:
+            rows = db.execute_query(
+                "SELECT * FROM audit_master_departments ORDER BY topic ASC, display_order ASC, s_no ASC, id ASC;"
+            )
+        return {"status": "success", "data": _serialize_audit_rows(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/audit/master-departments")
+def create_audit_master_department(req: Dict[str, Any]):
+    try:
+        topic = (req.get("topic") or "internal_report").strip()
+        department = (req.get("department") or "").strip()
+        if not department:
+            raise HTTPException(status_code=400, detail="Department / Function name is required")
+        s_no = int(req.get("s_no") or 1)
+        default_auditees = (req.get("default_auditees") or "").strip()
+        default_criteria = (req.get("default_criteria") or "QMS - 9001:2015").strip()
+        default_cycle_no = (req.get("default_cycle_no") or "12").strip()
+        display_order = int(req.get("display_order") or s_no)
+        row = db.execute_query(
+            """
+            INSERT INTO audit_master_departments (topic, s_no, department, default_auditees, default_criteria, default_cycle_no, display_order, is_active)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
+            ON CONFLICT (topic, department) DO UPDATE SET
+                s_no = EXCLUDED.s_no,
+                default_auditees = EXCLUDED.default_auditees,
+                default_criteria = EXCLUDED.default_criteria,
+                default_cycle_no = EXCLUDED.default_cycle_no,
+                display_order = EXCLUDED.display_order,
+                is_active = TRUE
+            RETURNING *;
+            """,
+            (topic, s_no, department, default_auditees, default_criteria, default_cycle_no, display_order),
+            fetch_all=False,
+        )
+        return {"status": "success", "data": _serialize_audit_rows([row])[0] if row else None}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/audit/master-departments/{item_id}")
+def update_audit_master_department(item_id: int, req: Dict[str, Any]):
+    try:
+        row = db.execute_query(
+            """
+            UPDATE audit_master_departments
+            SET topic = COALESCE(%s, topic),
+                s_no = COALESCE(%s, s_no),
+                department = COALESCE(%s, department),
+                default_auditees = COALESCE(%s, default_auditees),
+                default_criteria = COALESCE(%s, default_criteria),
+                default_cycle_no = COALESCE(%s, default_cycle_no),
+                display_order = COALESCE(%s, display_order),
+                is_active = COALESCE(%s, is_active)
+            WHERE id = %s
+            RETURNING *;
+            """,
+            (
+                req.get("topic"),
+                req.get("s_no"),
+                req.get("department"),
+                req.get("default_auditees"),
+                req.get("default_criteria"),
+                req.get("default_cycle_no"),
+                req.get("display_order"),
+                req.get("is_active"),
+                item_id,
+            ),
+            fetch_all=False,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Audit master department not found")
+        return {"status": "success", "data": _serialize_audit_rows([row])[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/audit/master-departments/{item_id}")
+def delete_audit_master_department(item_id: int):
+    try:
+        db.execute_commit("DELETE FROM audit_master_departments WHERE id = %s;", (item_id,))
+        return {"status": "success", "message": "Deleted audit master department"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/audit-flags")
 def get_audit_flags():

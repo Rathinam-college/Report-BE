@@ -891,6 +891,24 @@ def sync_all_transport_fleet_tables():
     summary = {}
     try:
         with conn.cursor() as cur:
+            # 0. Ensure census parking_fastag & cctv_replacement reflect vehicle ledger sums when census is 0
+            cur.execute("""
+                UPDATE transport_census_entries tce
+                SET parking_fastag = CASE WHEN COALESCE(tce.parking_fastag, 0) = 0 THEN v.sum_park ELSE tce.parking_fastag END,
+                    cctv_replacement = CASE WHEN COALESCE(tce.cctv_replacement, 0) = 0 THEN v.sum_cctv ELSE tce.cctv_replacement END
+                FROM (
+                    SELECT period_id, LOWER(branch) AS lbranch,
+                           COALESCE(SUM(parking_fastag), 0) AS sum_park,
+                           COALESCE(SUM(cctv_replacement), 0) AS sum_cctv
+                    FROM transport_vehicle_entries
+                    GROUP BY period_id, LOWER(branch)
+                ) v
+                WHERE tce.period_id = v.period_id
+                  AND LOWER(tce.branch) = v.lbranch
+                  AND ((COALESCE(tce.parking_fastag, 0) = 0 AND v.sum_park > 0)
+                    OR (COALESCE(tce.cctv_replacement, 0) = 0 AND v.sum_cctv > 0));
+            """)
+
             for fk, b_name in fleets:
                 # 1. Census: refresh matching period rows from transport_census_entries
                 cur.execute(

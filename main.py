@@ -5713,6 +5713,7 @@ def delete_transport_vehicle(vehicle_id: int):
                    COALESCE(sum(fc_cost), 0) as fc,
                    COALESCE(sum(statutory_cost), 0) as stat,
                    COALESCE(sum(repair_maintenance), 0) as rep,
+                   COALESCE(sum(cctv_replacement), 0) as cctv,
                    COALESCE(sum(parking_fastag), 0) as park,
                    COALESCE(sum(employee_cost), 0) as emp,
                    COALESCE(sum(other_cost), 0) as oth,
@@ -5731,6 +5732,7 @@ def delete_transport_vehicle(vehicle_id: int):
         tot_fc = float(remaining["fc"]) if remaining else 0.0
         tot_st = float(remaining["stat"]) if remaining else 0.0
         tot_rp = float(remaining["rep"]) if remaining else 0.0
+        tot_cctv = float(remaining["cctv"]) if remaining else 0.0
         tot_pk = float(remaining["park"]) if remaining else 0.0
         tot_em = float(remaining["emp"]) if remaining else 0.0
         tot_ot = float(remaining["oth"]) if remaining else 0.0
@@ -5747,6 +5749,7 @@ def delete_transport_vehicle(vehicle_id: int):
                     "fc_cost": tot_fc,
                     "statutory_cost": tot_st,
                     "repair_maintenance_cost": tot_rp,
+                    "cctv_replacement": tot_cctv,
                     "employee_cost": tot_em,
                     "other_cost": tot_ot,
                     "total_expenses": tot_ex,

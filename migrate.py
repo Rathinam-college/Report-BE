@@ -768,6 +768,7 @@ MIGRATION_STEPS = [
             ON CONFLICT (period_id) DO NOTHING;
 
             CREATE TABLE IF NOT EXISTS transport_vehicles_{fk} (LIKE transport_vehicle_entries INCLUDING DEFAULTS);
+            ALTER TABLE transport_vehicles_{fk} ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(15, 2) DEFAULT 0.0;
             INSERT INTO transport_vehicles_{fk}
             SELECT * FROM transport_vehicle_entries
             WHERE LOWER(branch) = '{fk}'

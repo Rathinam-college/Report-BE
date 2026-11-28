@@ -136,6 +136,16 @@ def ensure_and_seed_hostel_parameters():
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, TRUE)
                         ON CONFLICT (param_key) DO NOTHING;
                     ''', (s_no, key, name, sec, sec_ord, disp_ord, in_type, unit, formula))
+
+                # Update legacy 'No of Students in Hostels' label on existing DBs (e.g., live server)
+                cur.execute("""
+                    UPDATE hostel_master_parameters
+                    SET param_name = 'No of Staff + Students in Hostels',
+                        unit = 'Occupants',
+                        formula = 'Students + Staff'
+                    WHERE param_key IN ('students_normal_water', 'students_drinking_water')
+                      AND param_name = 'No of Students in Hostels';
+                """)
                 conn.commit()
         finally:
             db.release_db_connection(conn)

@@ -273,6 +273,10 @@ def ensure_schema_compatibility():
         CREATE INDEX IF NOT EXISTS idx_trans_veh_period_branch ON transport_vehicle_entries(period_id, branch);
         """,
         "ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(14, 2) DEFAULT 0.00;",
+        "ALTER TABLE transport_census_kpm ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(14, 2) DEFAULT 0.00;",
+        "ALTER TABLE transport_census_rps ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(14, 2) DEFAULT 0.00;",
+        "ALTER TABLE transport_census_university ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(14, 2) DEFAULT 0.00;",
+        "ALTER TABLE transport_census_common ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(14, 2) DEFAULT 0.00;",
         "ALTER TABLE transport_vehicle_entries ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(15, 2) DEFAULT 0.0;",
         "ALTER TABLE audit_non_academic_reports ADD COLUMN IF NOT EXISTS remarks TEXT DEFAULT '';"
     ]

@@ -325,6 +325,7 @@ MIGRATION_STEPS = [
         ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS diesel_per_100km NUMERIC(10, 2) DEFAULT 0.00;
         ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS cab_billing NUMERIC(12, 2) DEFAULT 0.00;
         ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(14, 2) DEFAULT 0.00;
+        ALTER TABLE transport_census_entries ADD COLUMN IF NOT EXISTS parking_fastag NUMERIC(14, 2) DEFAULT 0.00;
         """
     ),
     (
@@ -778,6 +779,7 @@ MIGRATION_STEPS = [
             f"""
             CREATE TABLE IF NOT EXISTS transport_census_{fk} (LIKE transport_census_entries INCLUDING DEFAULTS);
             ALTER TABLE transport_census_{fk} ADD COLUMN IF NOT EXISTS cctv_replacement NUMERIC(14, 2) DEFAULT 0.00;
+            ALTER TABLE transport_census_{fk} ADD COLUMN IF NOT EXISTS parking_fastag NUMERIC(14, 2) DEFAULT 0.00;
             ALTER TABLE transport_census_{fk} DROP CONSTRAINT IF EXISTS uq_transport_census_{fk}_period;
             ALTER TABLE transport_census_{fk} ADD CONSTRAINT uq_transport_census_{fk}_period UNIQUE (period_id);
             INSERT INTO transport_census_{fk}

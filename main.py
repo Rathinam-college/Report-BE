@@ -1729,6 +1729,22 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
         transport_census_data = {}
         transport_census_by_branch = {b: {} for b in TRANSPORT_BRANCHES}
         try:
+            veh_extra_rows = db.execute_query(
+                """
+                SELECT period_id, branch,
+                       COALESCE(SUM(parking_fastag), 0) AS sum_park,
+                       COALESCE(SUM(cctv_replacement), 0) AS sum_cctv
+                FROM transport_vehicle_entries
+                GROUP BY period_id, branch;
+                """
+            )
+            veh_extra_map = {
+                (str(vr.get("branch") or "Common"), str(vr["period_id"])): {
+                    "sum_park": float(vr["sum_park"] or 0),
+                    "sum_cctv": float(vr["sum_cctv"] or 0),
+                }
+                for vr in (veh_extra_rows or [])
+            }
             t_rows = db.execute_query("SELECT * FROM transport_census_entries")
             for tr in t_rows:
                 b = tr.get("branch") or "Common"
@@ -1737,6 +1753,12 @@ def get_matrix(module: str = "food", branch: Optional[str] = None):
                     k: (float(v) if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) else v)
                     for k, v in tr.items()
                 }
+                extra = veh_extra_map.get((b, p_str))
+                if extra:
+                    if not (conv.get("parking_fastag") or 0) and extra["sum_park"] > 0:
+                        conv["parking_fastag"] = extra["sum_park"]
+                    if not (conv.get("cctv_replacement") or 0) and extra["sum_cctv"] > 0:
+                        conv["cctv_replacement"] = extra["sum_cctv"]
                 c_metrics = tr.get("custom_metrics") or {}
                 if isinstance(c_metrics, str):
                     try:

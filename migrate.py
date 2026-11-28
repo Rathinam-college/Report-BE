@@ -863,7 +863,109 @@ def run_migrations():
     # Operational data must only be populated when user enters and saves via Data Entry.
     # To manually reseed demo data, use the explicit POST /api/system/seed-default endpoint.
 
+    try:
+        sync_all_transport_fleet_tables()
+    except Exception as sf_e:
+        print(f"  [WARNING] Transport Per-Fleet Sync skipped: {sf_e}")
+
     return True
+
+
+def sync_all_transport_fleet_tables():
+    """
+    Filters existing Transport data by fleet (KPM, RPS, University, Common) from the
+    shared tables and upserts/refreshes all 16 per-fleet tables:
+      - transport_census_{fleet}
+      - transport_vehicles_{fleet}
+      - transport_expenses_{fleet}
+      - transport_budget_{fleet}
+    """
+    fleets = [
+        ("kpm", "KPM"),
+        ("rps", "RPS"),
+        ("university", "University"),
+        ("common", "Common"),
+    ]
+    conn = db.get_db_connection()
+    summary = {}
+    try:
+        with conn.cursor() as cur:
+            for fk, b_name in fleets:
+                # 1. Census: refresh matching period rows from transport_census_entries
+                cur.execute(
+                    f"""
+                    DELETE FROM transport_census_{fk}
+                    WHERE period_id IN (
+                        SELECT period_id FROM transport_census_entries WHERE LOWER(branch) = %s
+                    );
+                    INSERT INTO transport_census_{fk}
+                    SELECT * FROM transport_census_entries WHERE LOWER(branch) = %s;
+                    """,
+                    (fk, fk),
+                )
+
+                # 2. Vehicles: refresh from transport_vehicle_entries
+                cur.execute(f"DELETE FROM transport_vehicles_{fk};")
+                cur.execute(
+                    f"""
+                    INSERT INTO transport_vehicles_{fk}
+                    SELECT * FROM transport_vehicle_entries WHERE LOWER(branch) = %s;
+                    """,
+                    (fk,),
+                )
+
+                # 3. Expenses: refresh from transport_expense_entries
+                cur.execute(f"DELETE FROM transport_expenses_{fk};")
+                cur.execute(
+                    f"""
+                    INSERT INTO transport_expenses_{fk}
+                    SELECT id, period_id, cost_head_id, vendor_id, amount, status::text, remarks,
+                           recorded_by, audited_at, created_at, updated_at, module, branch
+                    FROM transport_expense_entries WHERE LOWER(branch) = %s;
+                    """,
+                    (fk,),
+                )
+
+                # 4. Budget: sync sanctioned amounts from transport_budget_tracking where present
+                cur.execute(
+                    f"""
+                    UPDATE transport_budget_{fk} fb
+                    SET sanctioned_amount = tbt.sanctioned_amount,
+                        updated_at = CURRENT_TIMESTAMP
+                    FROM transport_budget_tracking tbt
+                    WHERE LOWER(tbt.branch) = %s
+                      AND LOWER(TRIM(tbt.param_name)) = LOWER(TRIM(fb.param_name));
+                    """,
+                    (fk,),
+                )
+
+                cur.execute(f"SELECT COUNT(*) FROM transport_census_{fk};")
+                c_cnt = cur.fetchone()[0]
+                cur.execute(f"SELECT COUNT(*) FROM transport_vehicles_{fk};")
+                v_cnt = cur.fetchone()[0]
+                cur.execute(f"SELECT COUNT(*) FROM transport_expenses_{fk};")
+                e_cnt = cur.fetchone()[0]
+                cur.execute(f"SELECT COUNT(*) FROM transport_budget_{fk};")
+                b_cnt = cur.fetchone()[0]
+
+                summary[b_name] = {
+                    "census": c_cnt,
+                    "vehicles": v_cnt,
+                    "expenses": e_cnt,
+                    "budget": b_cnt,
+                }
+        conn.commit()
+        print("  [OK] Synced & Filtered All 16 Per-Fleet Transport Tables:", summary)
+        return summary
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        db.release_db_connection(conn)
+
 
 if __name__ == "__main__":
     ok = run_migrations()

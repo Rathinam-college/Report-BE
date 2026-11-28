@@ -5017,6 +5017,19 @@ def sync_fleet_expenses(cur, period_id: int, branch: Optional[str]):
         )
 
 
+@app.post("/api/transport/sync-fleet-tables")
+def trigger_sync_transport_fleet_tables():
+    """
+    Filters all existing Transport data by fleet (KPM, RPS, University, Common) and
+    updates all 16 dedicated per-fleet tables (budget, census, vehicles, expenses).
+    """
+    try:
+        summary = migrate.sync_all_transport_fleet_tables()
+        return {"status": "success", "message": "All 16 per-fleet Transport tables synced.", "summary": summary}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/transport/expenses/{fleet_name}")
 def get_fleet_expenses(fleet_name: str, period_id: Optional[int] = None):
     """Returns expense entries from the dedicated per-fleet table (transport_expenses_{fleet})."""
